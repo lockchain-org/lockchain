@@ -13,5 +13,8 @@ pub mod workflow;
 
 pub use config::{ConfigFormat, CryptoCfg, Fallback, LockchainConfig, Policy, Usb};
 pub use error::{LockchainError, LockchainResult};
-pub use provider::{DatasetKeyDescriptor, KeyState, KeyStatusSnapshot, ZfsProvider};
+pub use provider::{
+    DatasetKeyDescriptor, KeyProvider, KeyState, KeyStatusSnapshot, LuksKeyProvider, ProviderKind,
+    ZfsProvider,
+};
 pub use service::{LockchainService, UnlockOptions, UnlockReport};

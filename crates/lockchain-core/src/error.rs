@@ -24,6 +24,9 @@ pub enum LockchainError {
     #[error("[LC1100] configuration error: {0}")]
     InvalidConfig(String),
 
+    #[error("[LC1101] provider selection error: {0}")]
+    ProviderSelection(String),
+
     #[error("[LC1200] dataset `{0}` is not declared in policy")]
     DatasetNotConfigured(String),
 
@@ -52,6 +55,7 @@ impl LockchainError {
             LockchainError::Yaml(_) => "LC1002",
             LockchainError::TomlSer(_) => "LC1003",
             LockchainError::InvalidConfig(_) => "LC1100",
+            LockchainError::ProviderSelection(_) => "LC1101",
             LockchainError::DatasetNotConfigured(_) => "LC1200",
             LockchainError::MissingKeySource(_) => "LC1201",
             LockchainError::InvalidHexKey { .. } => "LC1300",

@@ -4,9 +4,12 @@ use anyhow::{Context, Result};
 use lockchain_core::{
     config::{LockchainConfig, DEFAULT_CONFIG_PATH},
     logging,
+    provider::{KeyProvider, KeyStatusSnapshot, LuksKeyProvider, ProviderKind},
     service::{LockchainService, UnlockOptions},
     workflow,
+    LockchainError,
 };
+use lockchain_luks::SystemLuksProvider;
 use lockchain_zfs::SystemZfsProvider;
 use log::{error, info, warn};
 use std::sync::{Arc, Mutex};
@@ -20,6 +23,51 @@ use tokio::{
 };
 
 mod usb;
+
+#[derive(Clone)]
+enum RuntimeProvider {
+    Zfs(SystemZfsProvider),
+    Luks(LuksKeyProvider<SystemLuksProvider>),
+}
+
+impl KeyProvider for RuntimeProvider {
+    type Error = LockchainError;
+
+    fn kind(&self) -> ProviderKind {
+        match self {
+            RuntimeProvider::Zfs(_) => ProviderKind::Zfs,
+            RuntimeProvider::Luks(_) => ProviderKind::Luks,
+        }
+    }
+
+    fn encryption_root(&self, target: &str) -> std::result::Result<String, Self::Error> {
+        match self {
+            RuntimeProvider::Zfs(provider) => provider.encryption_root(target),
+            RuntimeProvider::Luks(provider) => provider.encryption_root(target),
+        }
+    }
+
+    fn locked_descendants(&self, root: &str) -> std::result::Result<Vec<String>, Self::Error> {
+        match self {
+            RuntimeProvider::Zfs(provider) => provider.locked_descendants(root),
+            RuntimeProvider::Luks(provider) => provider.locked_descendants(root),
+        }
+    }
+
+    fn load_key_tree(&self, root: &str, key: &[u8]) -> std::result::Result<Vec<String>, Self::Error> {
+        match self {
+            RuntimeProvider::Zfs(provider) => provider.load_key_tree(root, key),
+            RuntimeProvider::Luks(provider) => provider.load_key_tree(root, key),
+        }
+    }
+
+    fn describe_targets(&self, targets: &[String]) -> std::result::Result<KeyStatusSnapshot, Self::Error> {
+        match self {
+            RuntimeProvider::Zfs(provider) => provider.describe_targets(targets),
+            RuntimeProvider::Luks(provider) => provider.describe_targets(targets),
+        }
+    }
+}
 
 /// Tracks whether USB discovery and unlock routines consider the world healthy.
 #[derive(Default)]
@@ -110,7 +158,20 @@ async fn run() -> Result<()> {
         config.path.display()
     );
 
-    let provider = SystemZfsProvider::from_config(&config).context("initialise zfs provider")?;
+    let provider_kind = config
+        .resolve_provider_kind()
+        .map_err(anyhow::Error::new)
+        .context("resolve provider kind")?;
+
+    let provider = match provider_kind {
+        ProviderKind::Zfs => {
+            RuntimeProvider::Zfs(SystemZfsProvider::from_config(&config).context("initialise zfs provider")?)
+        }
+        ProviderKind::Luks => RuntimeProvider::Luks(LuksKeyProvider::new(
+            SystemLuksProvider::from_config(&config).context("initialise luks provider")?,
+        )),
+        ProviderKind::Auto => unreachable!("resolve_provider_kind must return a concrete kind"),
+    };
     let service = Arc::new(LockchainService::new(config.clone(), provider));
 
     // health status broadcast (true = ready, false = degraded)
@@ -121,6 +182,7 @@ async fn run() -> Result<()> {
     let unlock_handle = tokio::spawn(periodic_unlock(
         service.clone(),
         config.clone(),
+        provider_kind,
         health_channel.clone(),
     ));
     let health_handle = tokio::spawn(health_server(health_rx));
@@ -139,17 +201,22 @@ async fn run() -> Result<()> {
 
 /// Periodically attempt to unlock the configured dataset and update health.
 async fn periodic_unlock(
-    service: Arc<LockchainService<SystemZfsProvider>>,
+    service: Arc<LockchainService<RuntimeProvider>>,
     config: Arc<LockchainConfig>,
+    provider_kind: ProviderKind,
     health: HealthChannel,
 ) -> Result<()> {
     let mut ticker = interval(Duration::from_secs(30));
     let mut last_success = Instant::now();
     loop {
         ticker.tick().await;
-        let dataset = config.policy.datasets.first().cloned().unwrap_or_default();
-        if dataset.is_empty() {
-            warn!("no datasets configured; daemon idle");
+        let target = config
+            .targets_for(provider_kind)
+            .first()
+            .cloned()
+            .unwrap_or_default();
+        if target.is_empty() {
+            warn!("no targets configured for provider={provider_kind:?}; daemon idle");
             continue;
         }
 
@@ -162,23 +229,23 @@ async fn periodic_unlock(
             continue;
         }
 
-        match service.unlock_with_retry(&dataset, UnlockOptions::default()) {
+        match service.unlock_with_retry(&target, UnlockOptions::default()) {
             Ok(report) => {
                 if report.already_unlocked {
-                    info!("dataset {dataset} already unlocked");
+                    info!("target {target} already unlocked");
                 } else {
-                    info!("unlocked {dataset} with {} nodes", report.unlocked.len());
+                    info!("unlocked {target} with {} nodes", report.unlocked.len());
                 }
                 health.set_unlock_ready(true);
                 last_success = Instant::now();
             }
             Err(err) => {
-                warn!("unlock attempt failed for {dataset}: {err}");
+                warn!("unlock attempt failed for {target}: {err}");
                 health.set_unlock_ready(false);
                 // degrade if failure lasts >5 minutes
                 if last_success.elapsed() > Duration::from_secs(300) {
                     warn!(
-                        "dataset {dataset} has been locked for {:?}",
+                        "target {target} has been locked for {:?}",
                         last_success.elapsed()
                     );
                 }

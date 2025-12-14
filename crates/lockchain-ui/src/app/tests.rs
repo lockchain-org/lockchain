@@ -1,6 +1,7 @@
 use super::*;
 use lockchain_core::config::{
-    ConfigFormat, CryptoCfg, Fallback, LockchainConfig, Policy, RetryCfg, Usb,
+    ConfigFormat, CryptoCfg, Fallback, LockchainConfig, LuksCfg, Policy, ProviderCfg, RetryCfg,
+    Usb,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -37,14 +38,17 @@ fn resolve_dataset_prefers_command_line_values() {
 
 fn dummy_config() -> LockchainConfig {
     LockchainConfig {
+        provider: ProviderCfg::default(),
         policy: Policy {
             datasets: vec![],
+            mappings: vec![],
             zfs_path: None,
             zpool_path: None,
             binary_path: None,
             allow_root: false,
         },
         crypto: CryptoCfg { timeout_secs: 5 },
+        luks: LuksCfg::default(),
         usb: Usb {
             key_hex_path: "/tmp/key.raw".into(),
             expected_sha256: None,

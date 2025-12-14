@@ -67,9 +67,15 @@ Root unlock adds initrd integration (dracut + initramfs-tools) on top of the pro
 
 ## Configuration Files
 
-LockChain uses provider-specific config files for now:
+LockChain uses a unified config file with provider selection:
+
+- Default: `/etc/lockchain.toml`
+- Select provider via `[provider] kind = "zfs" | "luks" | "auto"`.
+- Configure targets via:
+  - ZFS: `[policy] datasets = [...]` (plus optional `policy.zfs_path` / `policy.zpool_path`)
+  - LUKS: `[policy] mappings = [...]` (plus optional `[luks] cryptsetup_path = ...`)
+
+Legacy config files are still supported for now (and will be auto-discovered when `/etc/lockchain.toml` is missing):
 
 - ZFS: `/etc/lockchain-zfs.toml` (template: `packaging/systemd/lockchain-zfs.toml`)
 - LUKS: `/etc/lockchain-luks.toml` (template: `packaging/systemd/lockchain-luks.toml`)
-
-Once the unified Control Deck is live, it will be able to switch contexts without forcing operators to juggle “two apps stapled together”.

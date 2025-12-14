@@ -1,5 +1,6 @@
 use lockchain_core::config::{
-    ConfigFormat, CryptoCfg, Fallback, LockchainConfig, Policy, RetryCfg, Usb,
+    ConfigFormat, CryptoCfg, Fallback, LockchainConfig, LuksCfg, Policy, ProviderCfg, RetryCfg,
+    Usb,
 };
 use lockchain_core::service::{LockchainService, UnlockOptions};
 use lockchain_core::LockchainResult;
@@ -127,14 +128,17 @@ fn unlock_smoke_unlocks_dev_pool() -> LockchainResult<()> {
     let expected_sha = hex::encode(Sha256::digest(&raw_key));
 
     let config = Arc::new(LockchainConfig {
+        provider: ProviderCfg::default(),
         policy: Policy {
             datasets: vec!["tank/secure".to_string(), "tank/secure/home".to_string()],
+            mappings: Vec::new(),
             zfs_path: Some(zfs_path.to_string_lossy().into_owned()),
             zpool_path: Some(zpool_path.to_string_lossy().into_owned()),
             binary_path: None,
             allow_root: false,
         },
         crypto: CryptoCfg { timeout_secs: 5 },
+        luks: LuksCfg::default(),
         usb: Usb {
             key_hex_path: key_path.to_string_lossy().into_owned(),
             expected_sha256: Some(expected_sha),

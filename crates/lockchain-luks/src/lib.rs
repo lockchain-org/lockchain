@@ -8,11 +8,28 @@
 //! - initrd hooks (dracut + initramfs-tools) to wire root unlock
 
 use lockchain_core::error::{LockchainError, LockchainResult};
+use lockchain_core::LockchainConfig;
 use lockchain_provider::luks::{LuksMappingDescriptor, LuksProvider, LuksState};
+use std::path::Path;
 
 /// Placeholder system provider; implementation is added in ADR-003 follow-ups.
 #[derive(Debug, Clone, Default)]
 pub struct SystemLuksProvider;
+
+impl SystemLuksProvider {
+    pub fn from_config(config: &LockchainConfig) -> LockchainResult<Self> {
+        if let Some(path) = config.luks.cryptsetup_path.as_deref() {
+            let candidate = Path::new(path);
+            if !candidate.exists() {
+                return Err(LockchainError::InvalidConfig(format!(
+                    "cryptsetup binary not found at {}",
+                    candidate.display()
+                )));
+            }
+        }
+        Ok(Self)
+    }
+}
 
 impl LuksProvider for SystemLuksProvider {
     type Error = LockchainError;

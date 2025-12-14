@@ -231,14 +231,17 @@ mod tests {
 
     fn sample_config(path: PathBuf) -> LockchainConfig {
         LockchainConfig {
+            provider: crate::config::ProviderCfg::default(),
             policy: Policy {
                 datasets: vec!["tank/secure".into()],
+                mappings: Vec::new(),
                 zfs_path: None,
                 zpool_path: None,
                 binary_path: None,
                 allow_root: false,
             },
             crypto: CryptoCfg { timeout_secs: 5 },
+            luks: crate::config::LuksCfg::default(),
             usb: Usb {
                 key_hex_path: "/run/lockchain/key.raw".into(),
                 expected_sha256: None,

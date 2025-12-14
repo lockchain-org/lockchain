@@ -42,7 +42,7 @@ Implementation sketch:
 
 The Control Deck should be able to switch contexts in three ways:
 
-1. **Auto-detect**: inspect known config locations (`/etc/lockchain-zfs.toml`, `/etc/lockchain-luks.toml`) and offer valid modes.
+1. **Auto-detect**: prefer `/etc/lockchain.toml`, then fall back to legacy locations (`/etc/lockchain-zfs.toml`, `/etc/lockchain-luks.toml`) and offer valid modes.
 2. **Operator toggle**: a quick switcher in the header (keyboard-first).
 3. **Explicit launch**: support an override (env var or flag) for automation and screenshots.
 

@@ -8,13 +8,14 @@ use lockchain_core::{
     },
     keyfile::write_raw_key_file,
     logging, perf,
-    provider::{DatasetKeyDescriptor, KeyState},
+    provider::{DatasetKeyDescriptor, KeyState, LuksKeyProvider, ProviderKind},
     workflow::{
         self, bootstrap_plan, discover_topology, BootstrapOptions, BootstrapPlan,
         BootstrapTopology, ForgeMode, ProvisionOptions, WorkflowLevel, WorkflowReport,
     },
     LockchainService, UnlockOptions,
 };
+use lockchain_luks::SystemLuksProvider;
 use lockchain_zfs::SystemZfsProvider;
 use log::warn;
 use rpassword::prompt_password;
@@ -49,7 +50,7 @@ fn load_cli_config(path: &Path) -> Result<LockchainConfig> {
 #[command(
     name = "lockchain",
     version,
-    about = "Key management utilities for LockChain deployments (ZFS provider today; LUKS in progress)."
+    about = "Key management utilities for LockChain deployments (ZFS + LUKS provider selection)."
 )]
 struct Cli {
     /// Path to the Lockchain configuration file.
@@ -196,7 +197,7 @@ enum Commands {
     /// Validate a configuration file or emit the config schema.
     Validate {
         /// Path to the configuration file to validate.
-        #[arg(short = 'f', long, default_value = "/etc/lockchain-zfs.toml")]
+        #[arg(short = 'f', long, default_value = DEFAULT_CONFIG_PATH)]
         file: PathBuf,
 
         /// Output the JSON schema instead of validating a file.
@@ -261,7 +262,7 @@ enum BootstrapCommands {
         datasets: Vec<String>,
 
         /// Path to the lockchain configuration file to generate.
-        #[arg(long, default_value = "/etc/lockchain-zfs.toml")]
+        #[arg(long, default_value = DEFAULT_CONFIG_PATH)]
         config: PathBuf,
 
         /// Service user that will own lockchain processes.
@@ -353,6 +354,11 @@ fn run() -> Result<()> {
         } => {
             workflow::ensure_privilege_support().map_err(anyhow::Error::new)?;
             let mut config = load_cli_config(&config_path)?;
+            let provider_kind = config.resolve_provider_kind().map_err(anyhow::Error::new)?;
+            ensure!(
+                matches!(provider_kind, ProviderKind::Zfs),
+                "init is only supported for provider=zfs today"
+            );
             let provider = SystemZfsProvider::from_config(&config)?;
             let target = resolve_dataset(dataset, &config.policy)?;
             let options = ProvisionOptions {
@@ -376,6 +382,11 @@ fn run() -> Result<()> {
         Commands::Tuning => {
             workflow::ensure_privilege_support().map_err(anyhow::Error::new)?;
             let config = load_cli_config(&config_path)?;
+            let provider_kind = config.resolve_provider_kind().map_err(anyhow::Error::new)?;
+            ensure!(
+                matches!(provider_kind, ProviderKind::Zfs),
+                "tuning is only supported for provider=zfs today"
+            );
             let provider = SystemZfsProvider::from_config(&config)?;
             let mut report = workflow::tune(&config, provider).map_err(anyhow::Error::new)?;
             report.title = "Tuning sequence".into();
@@ -494,10 +505,27 @@ fn run() -> Result<()> {
 
             let issues = cfg.validate();
             if issues.is_empty() {
-                println!(
-                    "Configuration valid ({} datasets).",
-                    cfg.policy.datasets.len()
-                );
+                match cfg.provider.kind {
+                    ProviderKind::Zfs => {
+                        println!(
+                            "Configuration valid (provider=zfs, {} datasets).",
+                            cfg.policy.datasets.len()
+                        );
+                    }
+                    ProviderKind::Luks => {
+                        println!(
+                            "Configuration valid (provider=luks, {} mappings).",
+                            cfg.policy.mappings.len()
+                        );
+                    }
+                    ProviderKind::Auto => {
+                        println!(
+                            "Configuration valid (provider=auto, {} datasets, {} mappings).",
+                            cfg.policy.datasets.len(),
+                            cfg.policy.mappings.len()
+                        );
+                    }
+                }
             } else {
                 eprintln!("Configuration validation failed:");
                 for issue in issues {
@@ -612,6 +640,11 @@ fn run() -> Result<()> {
             force,
         } => {
             let config = Arc::new(load_cli_config(&config_path)?);
+            let provider_kind = config.resolve_provider_kind().map_err(anyhow::Error::new)?;
+            ensure!(
+                matches!(provider_kind, ProviderKind::Zfs),
+                "breakglass is only supported for provider=zfs today"
+            );
             let provider = SystemZfsProvider::from_config(&config)?;
             let service = LockchainService::new(config.clone(), provider);
 
@@ -676,6 +709,11 @@ fn run() -> Result<()> {
         } => {
             workflow::ensure_privilege_support().map_err(anyhow::Error::new)?;
             let config = load_cli_config(&config_path)?;
+            let provider_kind = config.resolve_provider_kind().map_err(anyhow::Error::new)?;
+            ensure!(
+                matches!(provider_kind, ProviderKind::Zfs),
+                "self-test is only supported for provider=zfs today"
+            );
             let provider = SystemZfsProvider::from_config(&config)?;
             let target = resolve_dataset(dataset, &config.policy)?;
             let report = workflow::self_test(&config, provider, &target, strict_usb)
@@ -686,6 +724,11 @@ fn run() -> Result<()> {
         Commands::Repair => {
             workflow::ensure_privilege_support().map_err(anyhow::Error::new)?;
             let config = load_cli_config(&config_path)?;
+            let provider_kind = config.resolve_provider_kind().map_err(anyhow::Error::new)?;
+            ensure!(
+                matches!(provider_kind, ProviderKind::Zfs),
+                "repair is only supported for provider=zfs today"
+            );
             let provider = SystemZfsProvider::from_config(&config)?;
             let mut report = workflow::tune(&config, provider).map_err(anyhow::Error::new)?;
             report.title = "Tuning sequence".into();
@@ -703,58 +746,16 @@ fn run() -> Result<()> {
             key_file,
         } => {
             let config = Arc::new(load_cli_config(&config_path)?);
-            let provider = SystemZfsProvider::from_config(&config)?;
-            let service = LockchainService::new(config.clone(), provider);
-            let target = resolve_dataset(dataset, &config.policy)?;
+            let provider_kind = config.resolve_provider_kind().map_err(anyhow::Error::new)?;
+            let target = resolve_target(dataset, &config, provider_kind)?;
             let options =
                 build_unlock_options(strict_usb, passphrase, prompt_passphrase, key_file, &target)?;
 
-            let report = service.unlock_with_retry(&target, options)?;
-            if report.already_unlocked {
-                println!(
-                    "Dataset {} (root {}) already has an available key.",
-                    target, report.encryption_root
-                );
-            } else {
-                println!(
-                    "Unlocked encryption root {} via dataset {}.",
-                    report.encryption_root, target
-                );
-                for ds in report.unlocked {
-                    println!("  - {ds}");
-                }
-            }
-        }
-        Commands::ProfileUnlock {
-            dataset,
-            strict_usb,
-            passphrase,
-            prompt_passphrase,
-            key_file,
-            note,
-        } => {
-            let config = Arc::new(load_cli_config(&config_path)?);
-            let provider = SystemZfsProvider::from_config(&config)?;
-            let service = LockchainService::new(config.clone(), provider);
-            let target = resolve_dataset(dataset, &config.policy)?;
-            let options =
-                build_unlock_options(strict_usb, passphrase, prompt_passphrase, key_file, &target)?;
-
-            let started = Instant::now();
-            let result = service.unlock_with_retry(&target, options);
-            let elapsed = started.elapsed();
-            let success = result.is_ok();
-
-            let record = perf::record_unlock_timing(
-                &target,
-                elapsed,
-                success,
-                note.filter(|s| !s.trim().is_empty()),
-            )
-            .context("failed to record unlock timing")?;
-
-            match result {
-                Ok(report) => {
+            match provider_kind {
+                ProviderKind::Zfs => {
+                    let provider = SystemZfsProvider::from_config(&config)?;
+                    let service = LockchainService::new(config.clone(), provider);
+                    let report = service.unlock_with_retry(&target, options)?;
                     if report.already_unlocked {
                         println!(
                             "Dataset {} (root {}) already has an available key.",
@@ -768,6 +769,89 @@ fn run() -> Result<()> {
                         for ds in report.unlocked {
                             println!("  - {ds}");
                         }
+                    }
+                }
+                ProviderKind::Luks => {
+                    let provider =
+                        LuksKeyProvider::new(SystemLuksProvider::from_config(&config)?);
+                    let service = LockchainService::new(config.clone(), provider);
+                    let report = service.unlock_with_retry(&target, options)?;
+                    if report.already_unlocked {
+                        println!("Mapping {} is already active.", target);
+                    } else {
+                        println!("Unlocked mapping {}.", target);
+                    }
+                }
+                ProviderKind::Auto => unreachable!("resolve_provider_kind must return a concrete kind"),
+            }
+        }
+        Commands::ProfileUnlock {
+            dataset,
+            strict_usb,
+            passphrase,
+            prompt_passphrase,
+            key_file,
+            note,
+        } => {
+            let config = Arc::new(load_cli_config(&config_path)?);
+            let provider_kind = config.resolve_provider_kind().map_err(anyhow::Error::new)?;
+            let target = resolve_target(dataset, &config, provider_kind)?;
+            let options =
+                build_unlock_options(strict_usb, passphrase, prompt_passphrase, key_file, &target)?;
+
+            let started = Instant::now();
+            let result = match provider_kind {
+                ProviderKind::Zfs => {
+                    let provider = SystemZfsProvider::from_config(&config)?;
+                    let service = LockchainService::new(config.clone(), provider);
+                    service.unlock_with_retry(&target, options)
+                }
+                ProviderKind::Luks => {
+                    let provider =
+                        LuksKeyProvider::new(SystemLuksProvider::from_config(&config)?);
+                    let service = LockchainService::new(config.clone(), provider);
+                    service.unlock_with_retry(&target, options)
+                }
+                ProviderKind::Auto => unreachable!("resolve_provider_kind must return a concrete kind"),
+            };
+            let elapsed = started.elapsed();
+            let success = result.is_ok();
+
+            let record = perf::record_unlock_timing(
+                &target,
+                elapsed,
+                success,
+                note.filter(|s| !s.trim().is_empty()),
+            )
+            .context("failed to record unlock timing")?;
+
+            match result {
+                Ok(report) => {
+                    match provider_kind {
+                        ProviderKind::Zfs => {
+                            if report.already_unlocked {
+                                println!(
+                                    "Dataset {} (root {}) already has an available key.",
+                                    target, report.encryption_root
+                                );
+                            } else {
+                                println!(
+                                    "Unlocked encryption root {} via dataset {}.",
+                                    report.encryption_root, target
+                                );
+                                for ds in report.unlocked {
+                                    println!("  - {ds}");
+                                }
+                            }
+                        }
+                        ProviderKind::Luks => {
+                            if report.already_unlocked {
+                                println!("Mapping {} is already active.", target);
+                            } else {
+                                println!("Unlocked mapping {}.", target);
+                            }
+                        }
+                        ProviderKind::Auto => unreachable!("resolve_provider_kind must return a concrete kind"),
                     }
                     println!(
                         "Unlock profiled in {} ms (baseline {} ms, delta {:+} ms).",
@@ -794,45 +878,81 @@ fn run() -> Result<()> {
         }
         Commands::Status { dataset } => {
             let config = Arc::new(load_cli_config(&config_path)?);
-            let provider = SystemZfsProvider::from_config(&config)?;
-            let service = LockchainService::new(config.clone(), provider);
-            let datasets = match dataset {
+            let provider_kind = config.resolve_provider_kind().map_err(anyhow::Error::new)?;
+            let targets: Vec<String> = match dataset {
                 Some(ds) => vec![ds],
-                None => config.policy.datasets.clone(),
+                None => config.targets_for(provider_kind).to_vec(),
             };
 
-            for ds in datasets {
-                let status = service.status(&ds)?;
-                if status.root_locked {
-                    println!(
-                        "{} (root {}) is LOCKED.",
-                        status.dataset, status.encryption_root
-                    );
-                    if status.locked_descendants.is_empty() {
-                        println!("  No locked descendants reported.");
-                    } else {
-                        println!("  Locked descendants:");
-                        for child in status.locked_descendants {
-                            println!("    - {child}");
+            match provider_kind {
+                ProviderKind::Zfs => {
+                    let provider = SystemZfsProvider::from_config(&config)?;
+                    let service = LockchainService::new(config.clone(), provider);
+                    for target in targets {
+                        let status = service.status(&target)?;
+                        if status.root_locked {
+                            println!(
+                                "{} (root {}) is LOCKED.",
+                                status.dataset, status.encryption_root
+                            );
+                            if status.locked_descendants.is_empty() {
+                                println!("  No locked descendants reported.");
+                            } else {
+                                println!("  Locked descendants:");
+                                for child in status.locked_descendants {
+                                    println!("    - {child}");
+                                }
+                            }
+                        } else {
+                            println!(
+                                "{} (root {}) is unlocked.",
+                                status.dataset, status.encryption_root
+                            );
                         }
                     }
-                } else {
-                    println!(
-                        "{} (root {}) is unlocked.",
-                        status.dataset, status.encryption_root
-                    );
                 }
+                ProviderKind::Luks => {
+                    let provider =
+                        LuksKeyProvider::new(SystemLuksProvider::from_config(&config)?);
+                    let service = LockchainService::new(config.clone(), provider);
+                    for target in targets {
+                        let status = service.status(&target)?;
+                        if status.root_locked {
+                            println!("Mapping {} is INACTIVE.", status.dataset);
+                        } else {
+                            println!("Mapping {} is active.", status.dataset);
+                        }
+                    }
+                }
+                ProviderKind::Auto => unreachable!("resolve_provider_kind must return a concrete kind"),
             }
         }
         Commands::ListKeys => {
             let config = Arc::new(load_cli_config(&config_path)?);
-            let provider = SystemZfsProvider::from_config(&config)?;
-            let service = LockchainService::new(config.clone(), provider);
-            let snapshot = service.list_keys()?;
-            print_key_table(snapshot);
+            let provider_kind = config.resolve_provider_kind().map_err(anyhow::Error::new)?;
+            let snapshot = match provider_kind {
+                ProviderKind::Zfs => {
+                    let provider = SystemZfsProvider::from_config(&config)?;
+                    let service = LockchainService::new(config.clone(), provider);
+                    service.list_keys()?
+                }
+                ProviderKind::Luks => {
+                    let provider =
+                        LuksKeyProvider::new(SystemLuksProvider::from_config(&config)?);
+                    let service = LockchainService::new(config.clone(), provider);
+                    service.list_keys()?
+                }
+                ProviderKind::Auto => unreachable!("resolve_provider_kind must return a concrete kind"),
+            };
+            print_key_table(provider_kind, snapshot);
         }
         Commands::Tui => {
             let config = Arc::new(load_cli_config(&config_path)?);
+            let provider_kind = config.resolve_provider_kind().map_err(anyhow::Error::new)?;
+            ensure!(
+                matches!(provider_kind, ProviderKind::Zfs),
+                "tui is only supported for provider=zfs today"
+            );
             let provider = SystemZfsProvider::from_config(&config)?;
             let service = LockchainService::new(config.clone(), provider);
             tui::launch(config, service)?;
@@ -1018,9 +1138,43 @@ fn resolve_dataset(dataset: Option<String>, policy: &Policy) -> Result<String> {
         .ok_or_else(|| anyhow::anyhow!("no datasets configured in policy.datasets"))
 }
 
+/// Pick a provider-aware target from CLI input or fall back to the first policy entry.
+fn resolve_target(
+    target: Option<String>,
+    config: &LockchainConfig,
+    provider: ProviderKind,
+) -> Result<String> {
+    if let Some(value) = target {
+        return Ok(value);
+    }
+
+    match provider {
+        ProviderKind::Zfs => config
+            .policy
+            .datasets
+            .first()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no datasets configured in policy.datasets")),
+        ProviderKind::Luks => config
+            .policy
+            .mappings
+            .first()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no mappings configured in policy.mappings")),
+        ProviderKind::Auto => Err(anyhow::anyhow!(
+            "provider.kind=auto cannot be used without resolving to a concrete provider"
+        )),
+    }
+}
+
 /// Render a simple table describing current key status across datasets.
-fn print_key_table(snapshot: Vec<DatasetKeyDescriptor>) {
-    println!("{:<32} {:<32} STATUS", "DATASET", "ENCRYPTION ROOT");
+fn print_key_table(provider: ProviderKind, snapshot: Vec<DatasetKeyDescriptor>) {
+    let label = match provider {
+        ProviderKind::Zfs => "DATASET",
+        ProviderKind::Luks => "MAPPING",
+        ProviderKind::Auto => "TARGET",
+    };
+    println!("{:<32} {:<32} STATUS", label, "ENCRYPTION ROOT");
     for entry in snapshot {
         let status = match entry.state {
             KeyState::Available => "available".to_string(),

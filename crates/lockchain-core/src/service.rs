@@ -3,7 +3,7 @@
 use crate::config::LockchainConfig;
 use crate::error::{LockchainError, LockchainResult};
 use crate::keyfile::{read_key_file, write_raw_key_file};
-use crate::provider::{KeyStatusSnapshot, ZfsProvider};
+use crate::provider::{KeyProvider, KeyStatusSnapshot};
 use hex::FromHex;
 use log::warn;
 use pbkdf2::pbkdf2_hmac;
@@ -42,12 +42,12 @@ pub struct DatasetStatus {
 }
 
 /// Coordinates configuration, providers, and key sources to unlock datasets.
-pub struct LockchainService<P: ZfsProvider<Error = LockchainError>> {
+pub struct LockchainService<P: KeyProvider<Error = LockchainError>> {
     config: Arc<LockchainConfig>,
     provider: P,
 }
 
-impl<P: ZfsProvider<Error = LockchainError>> LockchainService<P> {
+impl<P: KeyProvider<Error = LockchainError>> LockchainService<P> {
     /// Build a service with shared configuration and a concrete provider implementation.
     pub fn new(config: Arc<LockchainConfig>, provider: P) -> Self {
         Self { config, provider }
@@ -101,7 +101,10 @@ impl<P: ZfsProvider<Error = LockchainError>> LockchainService<P> {
         dataset: &str,
         options: UnlockOptions,
     ) -> LockchainResult<UnlockReport> {
-        if !self.config.contains_dataset(dataset) {
+        if !self
+            .config
+            .contains_target(self.provider.kind(), dataset)
+        {
             return Err(LockchainError::DatasetNotConfigured(dataset.to_string()));
         }
 
@@ -137,7 +140,10 @@ impl<P: ZfsProvider<Error = LockchainError>> LockchainService<P> {
 
     /// Summarise the current keystatus for `dataset` and its encryption root.
     pub fn status(&self, dataset: &str) -> LockchainResult<DatasetStatus> {
-        if !self.config.contains_dataset(dataset) {
+        if !self
+            .config
+            .contains_target(self.provider.kind(), dataset)
+        {
             return Err(LockchainError::DatasetNotConfigured(dataset.to_string()));
         }
 
@@ -157,7 +163,7 @@ impl<P: ZfsProvider<Error = LockchainError>> LockchainService<P> {
     /// Pull keystatus for every dataset declared in the policy.
     pub fn list_keys(&self) -> LockchainResult<KeyStatusSnapshot> {
         self.provider
-            .describe_datasets(&self.config.policy.datasets)
+            .describe_targets(self.config.targets_for(self.provider.kind()))
     }
 
     /// Locate or derive key material according to the supplied unlock options.
@@ -354,14 +360,17 @@ mod tests {
 
     fn base_config(key_path: &Path) -> LockchainConfig {
         LockchainConfig {
+            provider: crate::config::ProviderCfg::default(),
             policy: Policy {
                 datasets: vec!["tank/secure".to_string()],
+                mappings: Vec::new(),
                 zfs_path: None,
                 zpool_path: None,
                 binary_path: None,
                 allow_root: false,
             },
             crypto: CryptoCfg { timeout_secs: 5 },
+            luks: crate::config::LuksCfg::default(),
             usb: Usb {
                 key_hex_path: key_path.display().to_string(),
                 expected_sha256: None,

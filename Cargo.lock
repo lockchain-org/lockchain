@@ -2137,6 +2137,7 @@ dependencies = [
  "clap",
  "crossterm",
  "lockchain-core",
+ "lockchain-luks",
  "lockchain-zfs",
  "log",
  "ratatui",
@@ -2174,6 +2175,7 @@ version = "0.2.1"
 dependencies = [
  "anyhow",
  "lockchain-core",
+ "lockchain-luks",
  "lockchain-zfs",
  "log",
  "tokio",
@@ -2210,6 +2212,10 @@ dependencies = [
 [[package]]
 name = "lockchain-provider"
 version = "0.2.1"
+dependencies = [
+ "schemars",
+ "serde",
+]
 
 [[package]]
 name = "lockchain-ui"

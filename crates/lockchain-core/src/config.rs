@@ -2,6 +2,7 @@
 
 use crate::error::{LockchainError, LockchainResult};
 use directories_next::ProjectDirs;
+use lockchain_provider::ProviderKind;
 use log::{info, warn};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -15,9 +16,11 @@ use std::process::Command;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-pub const DEFAULT_CONFIG_PATH: &str = "/etc/lockchain-zfs.toml";
+pub const DEFAULT_CONFIG_PATH: &str = "/etc/lockchain.toml";
+const LEGACY_ZFS_CONFIG_PATH: &str = "/etc/lockchain-zfs.toml";
+const LEGACY_LUKS_CONFIG_PATH: &str = "/etc/lockchain-luks.toml";
 const KEY_PATH_ENV: &str = "LOCKCHAIN_KEY_PATH";
-const BOOTSTRAP_FILE_NAME: &str = "lockchain-zfs.toml";
+const BOOTSTRAP_FILE_NAME: &str = "lockchain.toml";
 const APP_QUALIFIER: &str = "io";
 const APP_ORGANIZATION: &str = "Lockchain";
 const APP_NAME: &str = "lockchain";
@@ -33,6 +36,13 @@ pub(crate) const KNOWN_ZPOOL_PATHS: &[&str] = &[
     "/bin/zpool",
     "/usr/local/sbin/zpool",
 ];
+pub(crate) const KNOWN_CRYPTSETUP_PATHS: &[&str] = &[
+    "/usr/sbin/cryptsetup",
+    "/usr/bin/cryptsetup",
+    "/sbin/cryptsetup",
+    "/bin/cryptsetup",
+    "/usr/local/sbin/cryptsetup",
+];
 const UBUNTU_DATASET_PREFIXES: &[&str] = &[
     "rpool/ROOT/ubuntu",
     "rpool/ROOT/default",
@@ -43,6 +53,20 @@ const UBUNTU_DATASET_PREFIXES: &[&str] = &[
 
 pub(crate) fn project_dirs() -> Option<ProjectDirs> {
     ProjectDirs::from(APP_QUALIFIER, APP_ORGANIZATION, APP_NAME)
+}
+
+/// Lightweight sanity check that a provided crypt mapping name matches common patterns.
+pub fn looks_like_mapping_name(name: &str) -> bool {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    if trimmed.starts_with('-') {
+        return false;
+    }
+    trimmed
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
 }
 
 fn detect_ubuntu_root_datasets() -> Option<Vec<String>> {
@@ -148,6 +172,34 @@ pub(crate) fn detect_binary_path(candidates: &[&str]) -> Option<String> {
         .map(|path| path.to_string_lossy().into_owned())
 }
 
+fn resolve_binary(configured: Option<&str>, candidates: &[&str], name: &str) -> Option<PathBuf> {
+    if let Some(path) = configured {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() {
+            let candidate = PathBuf::from(trimmed);
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    detect_binary_path(candidates)
+        .map(PathBuf::from)
+        .or_else(|| find_in_path(name))
+}
+
+fn find_in_path(binary: &str) -> Option<PathBuf> {
+    let paths = env::var_os("PATH")?;
+    env::split_paths(&paths).find_map(|dir| {
+        let candidate = dir.join(binary);
+        if candidate.exists() {
+            Some(candidate)
+        } else {
+            None
+        }
+    })
+}
+
 fn render_bootstrap_template(
     datasets: Option<&[String]>,
     usb_label: Option<&str>,
@@ -190,7 +242,7 @@ fn render_bootstrap_template(
         .unwrap_or_else(|| "# device_uuid = \"0000-0000\"".to_string());
 
     format!(
-        "# Auto-generated Lockchain configuration bootstrap.\n# Customize these values before provisioning production datasets.\n\n[policy]\n# Ubuntu default root dataset(s); adjust if you maintain a custom encrypted pool.\ndatasets = [{}]\nallow_root = false\nzfs_path = \"{}\"\nzpool_path = \"{}\"\n\n[crypto]\ntimeout_secs = 10\n\n[usb]\n# Point to the raw key path on the managed host.\nkey_hex_path = \"/run/lockchain/key.raw\"\n# Optional host-side backup (disabled by default); uncomment only if policy allows.\n# host_backup_path = \"/etc/lockchain/key.raw\"\n# Match the removable media via LABEL or UUID.\ndevice_label = \"REPLACE_WITH_USB_LABEL\"\n# device_uuid = \"0000-0000\"\ndevice_key_path = \"key.raw\"\n# Capture the checksum after provisioning.\nexpected_sha256 = \"\"\nmount_timeout_secs = 10\n\n[fallback]\nenabled = true\naskpass = true\naskpass_path = \"/usr/bin/systemd-ask-password\"\npassphrase_salt = \"\"\npassphrase_xor = \"\"\npassphrase_iters = 250000\n\n[retry]\nmax_attempts = 3\nbase_delay_ms = 500\nmax_delay_ms = 5000\njitter_ratio = 0.1\n",
+        "# Auto-generated Lockchain configuration bootstrap.\n# Customize these values before provisioning production targets.\n\n[provider]\n# zfs | luks | auto\nkind = \"auto\"\n\n[policy]\n# Ubuntu default root dataset(s); adjust if you maintain a custom encrypted pool.\ndatasets = [{}]\n# LUKS crypt mappings (uncomment once LUKS support lands).\n# mappings = [\"cryptroot\"]\nallow_root = false\nzfs_path = \"{}\"\nzpool_path = \"{}\"\n\n[luks]\n# cryptsetup_path = \"/usr/sbin/cryptsetup\"\n# crypttab_path = \"/etc/crypttab\"\n\n[crypto]\ntimeout_secs = 10\n\n[usb]\n# Point to the raw key path on the managed host.\nkey_hex_path = \"/run/lockchain/key.raw\"\n# Optional host-side backup (disabled by default); uncomment only if policy allows.\n# host_backup_path = \"/etc/lockchain/key.raw\"\n# Match the removable media via LABEL or UUID.\ndevice_label = \"REPLACE_WITH_USB_LABEL\"\n# device_uuid = \"0000-0000\"\ndevice_key_path = \"key.raw\"\n# Capture the checksum after provisioning.\nexpected_sha256 = \"\"\nmount_timeout_secs = 10\n\n[fallback]\nenabled = true\naskpass = true\naskpass_path = \"/usr/bin/systemd-ask-password\"\npassphrase_salt = \"\"\npassphrase_xor = \"\"\npassphrase_iters = 250000\n\n[retry]\nmax_attempts = 3\nbase_delay_ms = 500\nmax_delay_ms = 5000\njitter_ratio = 0.1\n",
         dataset_list,
         zfs_path,
         zpool_path
@@ -254,7 +306,13 @@ pub fn default_systemd_hint() -> &'static str {
 /// Describes which datasets we manage and the paths to supporting tooling.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Policy {
+    /// ZFS dataset list (used when provider is ZFS).
+    #[serde(default)]
     pub datasets: Vec<String>,
+
+    /// LUKS crypt mapping names (used when provider is LUKS).
+    #[serde(default)]
+    pub mappings: Vec<String>,
 
     #[serde(default)]
     pub zfs_path: Option<String>,
@@ -267,6 +325,40 @@ pub struct Policy {
 
     #[serde(default)]
     pub allow_root: bool,
+}
+
+/// Provider selection configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ProviderCfg {
+    #[serde(default)]
+    pub kind: ProviderKind,
+}
+
+impl Default for ProviderCfg {
+    fn default() -> Self {
+        Self {
+            kind: ProviderKind::Auto,
+        }
+    }
+}
+
+/// LUKS provider configuration (ADR-003 follow-ups).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct LuksCfg {
+    #[serde(default)]
+    pub cryptsetup_path: Option<String>,
+
+    #[serde(default)]
+    pub crypttab_path: Option<String>,
+}
+
+impl Default for LuksCfg {
+    fn default() -> Self {
+        Self {
+            cryptsetup_path: None,
+            crypttab_path: None,
+        }
+    }
 }
 
 /// Timeouts and other crypto-related knobs for CLI interactions.
@@ -428,10 +520,18 @@ impl Default for RetryCfg {
 /// Top-level configuration snapshot loaded from disk.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct LockchainConfig {
+    /// Active provider selection (zfs/luks/auto).
+    #[serde(default)]
+    pub provider: ProviderCfg,
+
     pub policy: Policy,
 
     #[serde(default)]
     pub crypto: CryptoCfg,
+
+    /// LUKS provider configuration (unused until `lockchain-luks` is implemented).
+    #[serde(default)]
+    pub luks: LuksCfg,
 
     #[serde(default)]
     pub usb: Usb,
@@ -473,13 +573,28 @@ impl LockchainConfig {
     ///
     /// If the requested path does not exist, Lockchain will attempt to
     /// materialise a bootstrap template at that location. When the caller
-    /// requests the global default (`/etc/lockchain-zfs.toml`) and the
+    /// requests the global default (`/etc/lockchain.toml`) and the
     /// process lacks permission to create it, a per-user configuration is
     /// written to the platform config directory instead.
     pub fn load_or_bootstrap<P: AsRef<Path>>(path: P) -> LockchainResult<Self> {
         let target = path.as_ref();
         if target.exists() {
             return Self::load(target);
+        }
+
+        if target == Self::default_path() {
+            match discover_legacy_config() {
+                Ok(Some(legacy)) => {
+                    warn!(
+                        "configuration missing at {}; falling back to legacy config at {}",
+                        target.display(),
+                        legacy.display()
+                    );
+                    return Self::load(&legacy);
+                }
+                Ok(None) => {}
+                Err(err) => return Err(err),
+            }
         }
 
         match ensure_bootstrap_file(target) {
@@ -500,7 +615,7 @@ impl LockchainConfig {
                 let user_path = Self::user_config_path().ok_or_else(|| {
                     LockchainError::InvalidConfig(
                         "unable to determine user configuration directory; \
-                        create /etc/lockchain-zfs.toml manually"
+                        create /etc/lockchain.toml manually"
                             .to_string(),
                     )
                 })?;
@@ -551,10 +666,31 @@ impl LockchainConfig {
             ConfigFormat::Yaml
         };
 
-        if cfg.policy.datasets.is_empty() {
-            return Err(LockchainError::InvalidConfig(
-                "policy.datasets must list at least one dataset".to_string(),
-            ));
+        match cfg.provider.kind {
+            ProviderKind::Zfs => {
+                if cfg.policy.datasets.is_empty() {
+                    return Err(LockchainError::InvalidConfig(
+                        "policy.datasets must list at least one dataset (provider=zfs)"
+                            .to_string(),
+                    ));
+                }
+            }
+            ProviderKind::Luks => {
+                if cfg.policy.mappings.is_empty() {
+                    return Err(LockchainError::InvalidConfig(
+                        "policy.mappings must list at least one mapping (provider=luks)"
+                            .to_string(),
+                    ));
+                }
+            }
+            ProviderKind::Auto => {
+                if cfg.policy.datasets.is_empty() && cfg.policy.mappings.is_empty() {
+                    return Err(LockchainError::InvalidConfig(
+                        "policy must list at least one dataset or mapping (provider=auto)"
+                            .to_string(),
+                    ));
+                }
+            }
         }
 
         Ok(cfg)
@@ -569,28 +705,158 @@ impl LockchainConfig {
         })
     }
 
+    /// Returns true when `mapping` is listed under `policy.mappings`.
+    pub fn contains_mapping(&self, mapping: &str) -> bool {
+        self.policy.mappings.iter().any(|configured| configured == mapping)
+    }
+
+    /// Returns true when `target` is managed by the selected provider kind.
+    pub fn contains_target(&self, provider: ProviderKind, target: &str) -> bool {
+        match provider {
+            ProviderKind::Zfs => self.contains_dataset(target),
+            ProviderKind::Luks => self.contains_mapping(target),
+            ProviderKind::Auto => false,
+        }
+    }
+
+    /// Return the configured targets for a provider kind.
+    pub fn targets_for(&self, provider: ProviderKind) -> &[String] {
+        match provider {
+            ProviderKind::Zfs => &self.policy.datasets,
+            ProviderKind::Luks => &self.policy.mappings,
+            ProviderKind::Auto => &[],
+        }
+    }
+
+    /// Resolve the active provider kind to use for workflows.
+    ///
+    /// When the configuration requests `auto`, Lockchain selects a provider by:
+    /// - looking for configured targets (`policy.datasets` / `policy.mappings`)
+    /// - confirming the corresponding host binaries are present (`zfs`/`zpool` or `cryptsetup`)
+    pub fn resolve_provider_kind(&self) -> LockchainResult<ProviderKind> {
+        match self.provider.kind {
+            ProviderKind::Zfs => Ok(ProviderKind::Zfs),
+            ProviderKind::Luks => Ok(ProviderKind::Luks),
+            ProviderKind::Auto => self.auto_detect_provider_kind(),
+        }
+    }
+
+    fn auto_detect_provider_kind(&self) -> LockchainResult<ProviderKind> {
+        let zfs_configured = !self.policy.datasets.is_empty();
+        let luks_configured = !self.policy.mappings.is_empty();
+        let zfs_available = self.zfs_toolchain_available();
+        let luks_available = self.luks_toolchain_available();
+
+        match (zfs_configured, luks_configured) {
+            (true, false) => {
+                if zfs_available {
+                    Ok(ProviderKind::Zfs)
+                } else {
+                    Err(LockchainError::ProviderSelection(
+                        "provider=auto inferred zfs from policy.datasets but `zfs`/`zpool` binaries were not found; set policy.zfs_path/policy.zpool_path or install ZFS utilities".into(),
+                    ))
+                }
+            }
+            (false, true) => {
+                if luks_available {
+                    Ok(ProviderKind::Luks)
+                } else {
+                    Err(LockchainError::ProviderSelection(
+                        "provider=auto inferred luks from policy.mappings but `cryptsetup` was not found; set luks.cryptsetup_path or install cryptsetup".into(),
+                    ))
+                }
+            }
+            (true, true) => match (zfs_available, luks_available) {
+                (true, false) => Ok(ProviderKind::Zfs),
+                (false, true) => Ok(ProviderKind::Luks),
+                (true, true) => Err(LockchainError::ProviderSelection(
+                    "provider=auto is ambiguous: both policy.datasets and policy.mappings are configured and both ZFS and cryptsetup binaries are present; set provider.kind to `zfs` or `luks`".into(),
+                )),
+                (false, false) => Err(LockchainError::ProviderSelection(
+                    "provider=auto cannot select a provider: both policy.datasets and policy.mappings are configured but neither ZFS nor cryptsetup binaries were found".into(),
+                )),
+            },
+            (false, false) => Err(LockchainError::ProviderSelection(
+                "provider selection requires configured targets; set policy.datasets (zfs) or policy.mappings (luks), or pin provider.kind explicitly".into(),
+            )),
+        }
+    }
+
+    fn zfs_toolchain_available(&self) -> bool {
+        let zfs = resolve_binary(
+            self.policy.zfs_path.as_deref(),
+            KNOWN_ZFS_PATHS,
+            "zfs",
+        );
+        let zpool = resolve_binary(
+            self.policy.zpool_path.as_deref(),
+            KNOWN_ZPOOL_PATHS,
+            "zpool",
+        );
+        zfs.is_some() && zpool.is_some()
+    }
+
+    fn luks_toolchain_available(&self) -> bool {
+        resolve_binary(
+            self.luks.cryptsetup_path.as_deref(),
+            KNOWN_CRYPTSETUP_PATHS,
+            "cryptsetup",
+        )
+        .is_some()
+    }
+
     /// Perform a best-effort validation pass and return human-readable issues.
     pub fn validate(&self) -> Vec<String> {
         let mut issues = Vec::new();
 
-        if self.policy.datasets.is_empty() {
-            issues.push("policy.datasets must contain at least one dataset".to_string());
+        match self.provider.kind {
+            ProviderKind::Zfs if self.policy.datasets.is_empty() => {
+                issues.push("policy.datasets must contain at least one dataset (provider=zfs)".into());
+            }
+            ProviderKind::Luks if self.policy.mappings.is_empty() => {
+                issues.push("policy.mappings must contain at least one mapping (provider=luks)".into());
+            }
+            ProviderKind::Auto if self.policy.datasets.is_empty() && self.policy.mappings.is_empty() => {
+                issues.push("policy must specify at least one dataset or mapping (provider=auto)".into());
+            }
+            _ => {}
         }
 
-        let mut seen = std::collections::HashSet::new();
-        for ds in &self.policy.datasets {
-            let trimmed = ds.trim();
-            if trimmed.is_empty() {
-                issues.push("policy.datasets contains an empty dataset entry".to_string());
-                continue;
+        if !self.policy.datasets.is_empty() {
+            let mut seen = std::collections::HashSet::new();
+            for ds in &self.policy.datasets {
+                let trimmed = ds.trim();
+                if trimmed.is_empty() {
+                    issues.push("policy.datasets contains an empty dataset entry".to_string());
+                    continue;
+                }
+                if !looks_like_dataset_name(trimmed) {
+                    issues.push(format!(
+                        "policy.datasets contains invalid dataset name: {trimmed}"
+                    ));
+                }
+                if !seen.insert(trimmed.to_string()) {
+                    issues.push(format!("duplicate dataset entry detected: {trimmed}"));
+                }
             }
-            if !looks_like_dataset_name(trimmed) {
-                issues.push(format!(
-                    "policy.datasets contains invalid dataset name: {trimmed}"
-                ));
-            }
-            if !seen.insert(trimmed.to_string()) {
-                issues.push(format!("duplicate dataset entry detected: {trimmed}"));
+        }
+
+        if !self.policy.mappings.is_empty() {
+            let mut seen = std::collections::HashSet::new();
+            for mapping in &self.policy.mappings {
+                let trimmed = mapping.trim();
+                if trimmed.is_empty() {
+                    issues.push("policy.mappings contains an empty mapping entry".to_string());
+                    continue;
+                }
+                if !looks_like_mapping_name(trimmed) {
+                    issues.push(format!(
+                        "policy.mappings contains invalid mapping name: {trimmed}"
+                    ));
+                }
+                if !seen.insert(trimmed.to_string()) {
+                    issues.push(format!("duplicate mapping entry detected: {trimmed}"));
+                }
             }
         }
 
@@ -708,9 +974,27 @@ fn ensure_bootstrap_file(path: &Path) -> io::Result<bool> {
     }
 }
 
+fn discover_legacy_config() -> LockchainResult<Option<PathBuf>> {
+    let legacy_zfs = Path::new(LEGACY_ZFS_CONFIG_PATH);
+    let legacy_luks = Path::new(LEGACY_LUKS_CONFIG_PATH);
+
+    match (legacy_zfs.exists(), legacy_luks.exists()) {
+        (true, false) => Ok(Some(legacy_zfs.to_path_buf())),
+        (false, true) => Ok(Some(legacy_luks.to_path_buf())),
+        (false, false) => Ok(None),
+        (true, true) => Err(LockchainError::ProviderSelection(format!(
+            "multiple legacy configuration files found ({} and {}); set LOCKCHAIN_CONFIG to select one",
+            legacy_zfs.display(),
+            legacy_luks.display()
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::tempdir;
 
     struct EnvGuard {
         key: &'static str,
@@ -738,14 +1022,17 @@ mod tests {
     #[test]
     fn key_path_respects_env_override() {
         let config = LockchainConfig {
+            provider: ProviderCfg::default(),
             policy: Policy {
                 datasets: vec!["tank/secure".into()],
+                mappings: Vec::new(),
                 zfs_path: None,
                 zpool_path: None,
                 binary_path: None,
                 allow_root: false,
             },
             crypto: CryptoCfg { timeout_secs: 1 },
+            luks: LuksCfg::default(),
             usb: Usb::default(),
             fallback: Fallback::default(),
             retry: RetryCfg::default(),
@@ -797,14 +1084,17 @@ tank/secure\t/mnt/secure\n";
     #[test]
     fn contains_dataset_allows_ancestors_and_descendants() {
         let mut config = LockchainConfig {
+            provider: ProviderCfg::default(),
             policy: Policy {
                 datasets: vec!["rpool/ROOT/ubuntu_js6lvu".into()],
+                mappings: Vec::new(),
                 zfs_path: None,
                 zpool_path: None,
                 binary_path: None,
                 allow_root: false,
             },
             crypto: CryptoCfg::default(),
+            luks: LuksCfg::default(),
             usb: Usb::default(),
             fallback: Fallback::default(),
             retry: RetryCfg::default(),
@@ -819,5 +1109,139 @@ tank/secure\t/mnt/secure\n";
 
         config.policy.datasets = vec!["rpool/ROOT".into()];
         assert!(config.contains_dataset("rpool/ROOT/ubuntu_js6lvu"));
+    }
+
+    #[test]
+    fn provider_auto_selects_zfs_when_only_datasets_configured() {
+        let dir = tempdir().unwrap();
+        let zfs = dir.path().join("zfs");
+        let zpool = dir.path().join("zpool");
+        fs::write(&zfs, "").unwrap();
+        fs::write(&zpool, "").unwrap();
+
+        let config = LockchainConfig {
+            provider: ProviderCfg {
+                kind: ProviderKind::Auto,
+            },
+            policy: Policy {
+                datasets: vec!["tank/secure".into()],
+                mappings: Vec::new(),
+                zfs_path: Some(zfs.to_string_lossy().into_owned()),
+                zpool_path: Some(zpool.to_string_lossy().into_owned()),
+                binary_path: None,
+                allow_root: false,
+            },
+            crypto: CryptoCfg::default(),
+            luks: LuksCfg::default(),
+            usb: Usb::default(),
+            fallback: Fallback::default(),
+            retry: RetryCfg::default(),
+            path: PathBuf::new(),
+            format: ConfigFormat::Toml,
+        };
+
+        assert_eq!(config.resolve_provider_kind().unwrap(), ProviderKind::Zfs);
+    }
+
+    #[test]
+    fn provider_auto_selects_luks_when_only_mappings_configured() {
+        let dir = tempdir().unwrap();
+        let cryptsetup = dir.path().join("cryptsetup");
+        fs::write(&cryptsetup, "").unwrap();
+
+        let config = LockchainConfig {
+            provider: ProviderCfg {
+                kind: ProviderKind::Auto,
+            },
+            policy: Policy {
+                datasets: Vec::new(),
+                mappings: vec!["cryptroot".into()],
+                zfs_path: None,
+                zpool_path: None,
+                binary_path: None,
+                allow_root: false,
+            },
+            crypto: CryptoCfg::default(),
+            luks: LuksCfg {
+                cryptsetup_path: Some(cryptsetup.to_string_lossy().into_owned()),
+                crypttab_path: None,
+            },
+            usb: Usb::default(),
+            fallback: Fallback::default(),
+            retry: RetryCfg::default(),
+            path: PathBuf::new(),
+            format: ConfigFormat::Toml,
+        };
+
+        assert_eq!(config.resolve_provider_kind().unwrap(), ProviderKind::Luks);
+    }
+
+    #[test]
+    fn provider_auto_errors_when_targets_missing() {
+        let config = LockchainConfig {
+            provider: ProviderCfg {
+                kind: ProviderKind::Auto,
+            },
+            policy: Policy {
+                datasets: Vec::new(),
+                mappings: Vec::new(),
+                zfs_path: None,
+                zpool_path: None,
+                binary_path: None,
+                allow_root: false,
+            },
+            crypto: CryptoCfg::default(),
+            luks: LuksCfg::default(),
+            usb: Usb::default(),
+            fallback: Fallback::default(),
+            retry: RetryCfg::default(),
+            path: PathBuf::new(),
+            format: ConfigFormat::Toml,
+        };
+
+        assert!(matches!(
+            config.resolve_provider_kind(),
+            Err(LockchainError::ProviderSelection(_))
+        ));
+    }
+
+    #[test]
+    fn provider_auto_errors_when_ambiguous_and_toolchains_present() {
+        let dir = tempdir().unwrap();
+        let zfs = dir.path().join("zfs");
+        let zpool = dir.path().join("zpool");
+        let cryptsetup = dir.path().join("cryptsetup");
+        fs::write(&zfs, "").unwrap();
+        fs::write(&zpool, "").unwrap();
+        fs::write(&cryptsetup, "").unwrap();
+
+        let config = LockchainConfig {
+            provider: ProviderCfg {
+                kind: ProviderKind::Auto,
+            },
+            policy: Policy {
+                datasets: vec!["tank/secure".into()],
+                mappings: vec!["cryptroot".into()],
+                zfs_path: Some(zfs.to_string_lossy().into_owned()),
+                zpool_path: Some(zpool.to_string_lossy().into_owned()),
+                binary_path: None,
+                allow_root: false,
+            },
+            crypto: CryptoCfg::default(),
+            luks: LuksCfg {
+                cryptsetup_path: Some(cryptsetup.to_string_lossy().into_owned()),
+                crypttab_path: None,
+            },
+            usb: Usb::default(),
+            fallback: Fallback::default(),
+            retry: RetryCfg::default(),
+            path: PathBuf::new(),
+            format: ConfigFormat::Toml,
+        };
+
+        assert!(matches!(
+            config.resolve_provider_kind(),
+            Err(LockchainError::ProviderSelection(_))
+        ));
     }
 }
