@@ -17,7 +17,7 @@ This brief captures the current attack surface for LockChain’s **ZFS provider*
 - **Loader bypass:** Dracut/initramfs-tools modules set `keylocation=file://…` and run before `zfs-load-key`; tuning verifies assets and rebuilds images to avoid drift.
 - **Stale or poisoned media:** `lockchain-key-usb` normalises keys, refuses unexpected sizes, and clears destination keys on failure; provisioning wipes and re-labels media unless in safe mode.
 - **Replay of legacy hex keys:** Hex material is auto-converted to raw and rewritten; tuning repairs policy checksum when missing.
-- **Log privacy:** JSON logs default; `lockchain` user runs services; file custody (`/etc/lockchain-zfs.toml` 640, keys 400) limits leakage.
+- **Log privacy:** JSON logs default; `lockchain` user runs services; file custody (`/etc/lockchain.toml` 640, keys 400) limits leakage.
 
 ## IEC 62443-3-3 Foundational Requirements Mapping
 

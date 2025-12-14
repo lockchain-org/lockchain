@@ -29,13 +29,21 @@ pub fn uninstall(config: &LockchainConfig) -> LockchainResult<WorkflowReport> {
     let mut events = Vec::new();
 
     if let Some(systemctl) = systemctl_path() {
+        disable_unit(&systemctl, "lockchain.service", &mut events);
         disable_unit(&systemctl, "lockchain-zfs.service", &mut events);
+        disable_unit(&systemctl, "lockchain-luks.service", &mut events);
         disable_unit(&systemctl, "lockchain-key-usb.service", &mut events);
         disable_unit(&systemctl, "run-lockchain.mount", &mut events);
 
-        for dataset in &config.policy.datasets {
-            if let Some(unit) = escaped_dataset_unit(dataset) {
-                disable_unit(&systemctl, &unit, &mut events);
+        for dataset in &config.policy.targets {
+            for template in [
+                "--template=lockchain@.service",
+                "--template=lockchain-zfs@.service",
+                "--template=lockchain-luks@.service",
+            ] {
+                if let Some(unit) = escaped_target_unit(dataset, template) {
+                    disable_unit(&systemctl, &unit, &mut events);
+                }
             }
         }
 
@@ -48,17 +56,34 @@ pub fn uninstall(config: &LockchainConfig) -> LockchainResult<WorkflowReport> {
     }
 
     let systemd_dir = systemd_dir();
-    let mount_unit = systemd_dir.join("run-lockchain.mount");
-    remove_file(&mount_unit, "Removed run-lockchain.mount unit", &mut events);
+    for unit in [
+        "run-lockchain.mount",
+        "lockchain.service",
+        "lockchain@.service",
+        "lockchain-key-usb.service",
+        "lockchain-zfs.service",
+        "lockchain-zfs@.service",
+        "lockchain-luks.service",
+        "lockchain-luks@.service",
+    ] {
+        let path = systemd_dir.join(unit);
+        remove_file(&path, "Removed systemd unit", &mut events);
+    }
 
-    for dataset in &config.policy.datasets {
-        if let Some(unit) = escaped_dataset_unit(dataset) {
-            let unit_path = systemd_dir.join(unit);
-            remove_file(
-                &unit_path,
-                "Removed dataset-specific systemd unit",
-                &mut events,
-            );
+    for dataset in &config.policy.targets {
+        for template in [
+            "--template=lockchain@.service",
+            "--template=lockchain-zfs@.service",
+            "--template=lockchain-luks@.service",
+        ] {
+            if let Some(unit) = escaped_target_unit(dataset, template) {
+                let unit_path = systemd_dir.join(unit);
+                remove_file(
+                    &unit_path,
+                    "Removed target-specific systemd unit",
+                    &mut events,
+                );
+            }
         }
     }
 
@@ -301,12 +326,9 @@ fn systemd_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/etc/systemd/system"))
 }
 
-fn escaped_dataset_unit(dataset: &str) -> Option<String> {
+fn escaped_target_unit(target: &str, template: &str) -> Option<String> {
     if let Some(path) = systemd_escape_path() {
-        if let Ok(output) = Command::new(path)
-            .args(["--template=lockchain-zfs@.service", dataset])
-            .output()
-        {
+        if let Ok(output) = Command::new(path).args([template, target]).output() {
             if output.status.success() {
                 let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 if !value.is_empty() {

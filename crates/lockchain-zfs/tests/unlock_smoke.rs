@@ -1,5 +1,6 @@
 use lockchain_core::config::{
-    ConfigFormat, CryptoCfg, Fallback, LockchainConfig, LuksCfg, Policy, ProviderCfg, RetryCfg, Usb,
+    ConfigFormat, CryptoCfg, Fallback, LockchainConfig, LuksCfg, Policy, ProviderCfg, RetryCfg,
+    Usb, ZfsCfg,
 };
 use lockchain_core::service::{LockchainService, UnlockOptions};
 use lockchain_core::LockchainResult;
@@ -129,12 +130,15 @@ fn unlock_smoke_unlocks_dev_pool() -> LockchainResult<()> {
     let config = Arc::new(LockchainConfig {
         provider: ProviderCfg::default(),
         policy: Policy {
-            datasets: vec!["tank/secure".to_string(), "tank/secure/home".to_string()],
-            mappings: Vec::new(),
-            zfs_path: Some(zfs_path.to_string_lossy().into_owned()),
-            zpool_path: Some(zpool_path.to_string_lossy().into_owned()),
+            targets: vec!["tank/secure".to_string(), "tank/secure/home".to_string()],
             binary_path: None,
             allow_root: false,
+            legacy_zfs_path: None,
+            legacy_zpool_path: None,
+        },
+        zfs: ZfsCfg {
+            zfs_path: Some(zfs_path.to_string_lossy().into_owned()),
+            zpool_path: Some(zpool_path.to_string_lossy().into_owned()),
         },
         crypto: CryptoCfg { timeout_secs: 5 },
         luks: LuksCfg::default(),
@@ -152,7 +156,7 @@ fn unlock_smoke_unlocks_dev_pool() -> LockchainResult<()> {
             passphrase_iters: 1,
         },
         retry: RetryCfg::default(),
-        path: PathBuf::from("/etc/lockchain-zfs.toml"),
+        path: PathBuf::from("/etc/lockchain.toml"),
         format: ConfigFormat::Toml,
     });
 

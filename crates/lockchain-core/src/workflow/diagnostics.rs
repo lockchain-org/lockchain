@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 const DEFAULT_SERVICES: &[&str] = &[
     "lockchain-key-usb.service",
-    "lockchain-zfs.service",
+    "lockchain.service",
     "run-lockchain.mount",
 ];
 const STAGING_ROOT: &str = "/run/lockchain/media";
@@ -167,7 +167,7 @@ where
         .unwrap_or(false);
     let datasets: Vec<String> = cfg
         .policy
-        .datasets
+        .targets
         .iter()
         .map(|d| d.trim().to_string())
         .filter(|d| !d.is_empty())
@@ -176,7 +176,7 @@ where
     if datasets.is_empty() {
         outcome.events.push(event(
             WorkflowLevel::Error,
-            "policy.datasets is empty; configure at least one encryption root before running tune/doctor.",
+            "policy.targets is empty; configure at least one encryption root before running tune/doctor.",
         ));
         return Ok(outcome);
     }

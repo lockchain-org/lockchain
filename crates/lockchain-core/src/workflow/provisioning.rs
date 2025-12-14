@@ -4,7 +4,7 @@ use super::{event, privilege::run_external, WorkflowEvent, WorkflowLevel, Workfl
 use crate::config::{detect_binary_path, LockchainConfig, Usb, KNOWN_ZFS_PATHS};
 use crate::error::{LockchainError, LockchainResult};
 use crate::keyfile::{read_key_file, write_raw_key_file};
-use crate::provider::ZfsProvider;
+use crate::provider::{ProviderKind, ZfsProvider};
 use pbkdf2::pbkdf2_hmac;
 use rand::rngs::OsRng;
 use rand::RngCore;
@@ -290,14 +290,14 @@ pub fn forge_key<P: ZfsProvider<Error = LockchainError> + Clone>(
     let dest_key_path = dest_path.clone();
     let datasets: Vec<String> = config
         .policy
-        .datasets
+        .targets
         .iter()
         .map(|d| d.trim().to_string())
         .filter(|d| !d.is_empty())
         .collect();
     if datasets.is_empty() {
         return Err(LockchainError::InvalidConfig(
-            "policy.datasets must contain at least one dataset before installing initramfs assets"
+            "policy.targets must contain at least one dataset before installing initramfs assets"
                 .into(),
         ));
     }
@@ -1084,8 +1084,10 @@ fn update_config(
     checksum: String,
     device_uuid: Option<String>,
 ) -> LockchainResult<()> {
-    if !config.policy.datasets.iter().any(|entry| entry == dataset) {
-        config.policy.datasets.push(dataset.to_string());
+    config.provider.r#type = ProviderKind::Zfs;
+
+    if !config.policy.targets.iter().any(|entry| entry == dataset) {
+        config.policy.targets.push(dataset.to_string());
     }
 
     let file_name = device_key_filename;
@@ -1110,12 +1112,12 @@ fn update_config(
         config.policy.binary_path = Some("/usr/local/bin/lockchain-cli".to_string());
     }
 
-    if config.policy.zfs_path.is_none() {
-        config.policy.zfs_path = Some("/usr/sbin/zfs".to_string());
+    if config.zfs.zfs_path.is_none() {
+        config.zfs.zfs_path = Some("/usr/sbin/zfs".to_string());
     }
 
-    if config.policy.zpool_path.is_none() {
-        config.policy.zpool_path = Some("/usr/sbin/zpool".to_string());
+    if config.zfs.zpool_path.is_none() {
+        config.zfs.zpool_path = Some("/usr/sbin/zpool".to_string());
     }
 
     if config.fallback.askpass_path.is_none() {
@@ -1559,7 +1561,7 @@ pub(crate) fn repair_boot_assets(
 ) -> LockchainResult<()> {
     let datasets: Vec<String> = config
         .policy
-        .datasets
+        .targets
         .iter()
         .map(|d| d.trim().to_string())
         .filter(|d| !d.is_empty())
@@ -1567,10 +1569,10 @@ pub(crate) fn repair_boot_assets(
     if datasets.is_empty() {
         events.push(event(
             WorkflowLevel::Error,
-            "policy.datasets is empty; set at least one encryption root before staging initramfs assets.",
+            "policy.targets is empty; set at least one encryption root before staging initramfs assets.",
         ));
         return Err(LockchainError::InvalidConfig(
-            "policy.datasets missing entries".into(),
+            "policy.targets missing entries".into(),
         ));
     }
 

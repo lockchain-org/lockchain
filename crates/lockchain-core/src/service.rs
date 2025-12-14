@@ -356,13 +356,13 @@ mod tests {
         LockchainConfig {
             provider: crate::config::ProviderCfg::default(),
             policy: Policy {
-                datasets: vec!["tank/secure".to_string()],
-                mappings: Vec::new(),
-                zfs_path: None,
-                zpool_path: None,
+                targets: vec!["tank/secure".to_string()],
                 binary_path: None,
                 allow_root: false,
+                legacy_zfs_path: None,
+                legacy_zpool_path: None,
             },
+            zfs: crate::config::ZfsCfg::default(),
             crypto: CryptoCfg { timeout_secs: 5 },
             luks: crate::config::LuksCfg::default(),
             usb: Usb {

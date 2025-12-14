@@ -19,19 +19,23 @@ fi
 install -d -o lockchain -g lockchain /var/lib/lockchain
 
 install -Dm644 "$ROOT_DIR/systemd/run-lockchain.mount" "$SYSTEMD_DIR/run-lockchain.mount"
+install -Dm644 "$ROOT_DIR/systemd/lockchain.service" "$SYSTEMD_DIR/lockchain.service"
+install -Dm644 "$ROOT_DIR/systemd/lockchain@.service" "$SYSTEMD_DIR/lockchain@.service"
+install -Dm644 "$ROOT_DIR/systemd/lockchain-key-usb.service" "$SYSTEMD_DIR/lockchain-key-usb.service"
+
+# Legacy unit names (installed for compatibility; prefer lockchain.service).
 install -Dm644 "$ROOT_DIR/systemd/lockchain-zfs.service" "$SYSTEMD_DIR/lockchain-zfs.service"
 install -Dm644 "$ROOT_DIR/systemd/lockchain-zfs@.service" "$SYSTEMD_DIR/lockchain-zfs@.service"
-install -Dm644 "$ROOT_DIR/systemd/lockchain-key-usb.service" "$SYSTEMD_DIR/lockchain-key-usb.service"
 install -Dm644 "$ROOT_DIR/systemd/lockchain-luks.service" "$SYSTEMD_DIR/lockchain-luks.service"
 install -Dm644 "$ROOT_DIR/systemd/lockchain-luks@.service" "$SYSTEMD_DIR/lockchain-luks@.service"
 
 systemctl daemon-reload
 systemctl enable run-lockchain.mount
-systemctl enable lockchain-zfs.service
+systemctl enable lockchain.service
 systemctl enable lockchain-key-usb.service
 
 echo "run-lockchain.mount enabled to stage volatile key material."
-echo "lockchain-zfs.service enabled under user 'lockchain'."
+echo "lockchain.service enabled under user 'lockchain'."
 echo "lockchain-key-usb.service enabled to monitor the USB token."
-echo "Enable dataset units with: systemctl enable lockchain-zfs@<dataset>.service"
-echo "LUKS units staged (disabled by default): lockchain-luks.service, lockchain-luks@.service"
+echo "Enable unlock units with: systemctl enable lockchain@<target>.service"
+echo "Legacy unit names also installed: lockchain-zfs.service, lockchain-luks.service"

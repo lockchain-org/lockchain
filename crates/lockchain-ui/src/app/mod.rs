@@ -1198,7 +1198,7 @@ impl LockchainUi {
         let mut lines = Vec::new();
         match directive {
             Directive::NewKey | Directive::NewKeySafe => {
-                if self.config.policy.datasets.is_empty() {
+                if self.config.policy.targets.is_empty() {
                     lines.push((
                         TerminalLevel::Warning,
                         "No datasets configured. Open Settings to add pool/dataset entries."
@@ -1250,7 +1250,7 @@ impl LockchainUi {
         let mut lines = Vec::new();
         match directive {
             Directive::NewKey | Directive::NewKeySafe => {
-                if self.config.policy.datasets.is_empty() {
+                if self.config.policy.targets.is_empty() {
                     lines.push((
                         TerminalLevel::Warning,
                         "No datasets configured. Open Settings to add pool/dataset entries."
@@ -1261,7 +1261,7 @@ impl LockchainUi {
                         TerminalLevel::Info,
                         format!(
                             "Default target dataset(s): {}.",
-                            self.config.policy.datasets.join(", ")
+                            self.config.policy.targets.join(", ")
                         ),
                     ));
                 }
@@ -1847,7 +1847,7 @@ impl LockchainUi {
     fn dataset_ready(&self) -> bool {
         self.config
             .policy
-            .datasets
+            .targets
             .iter()
             .any(|ds| !ds.trim().is_empty())
     }
@@ -1948,10 +1948,10 @@ impl LockchainUi {
     }
 
     fn populate_settings_fields(&mut self) {
-        self.settings_dataset = if self.config.policy.datasets.is_empty() {
+        self.settings_dataset = if self.config.policy.targets.is_empty() {
             "rpool".to_string()
         } else {
-            self.config.policy.datasets.join(", ")
+            self.config.policy.targets.join(", ")
         };
         self.settings_label = self.config.usb.device_label.clone().unwrap_or_default();
         self.settings_uuid = self.config.usb.device_uuid.clone().unwrap_or_default();
@@ -2004,7 +2004,7 @@ impl LockchainUi {
             return Err("USB UUID should contain hexadecimal characters (and optional hyphens/underscores).".into());
         }
 
-        self.config.policy.datasets = datasets;
+        self.config.policy.targets = datasets;
         self.config.usb.device_label = if label.is_empty() {
             None
         } else {
@@ -2321,7 +2321,7 @@ async fn run_directive(
                     .filter(|entry| !entry.is_empty())
                     .collect();
                 if !datasets.is_empty() {
-                    config.policy.datasets = datasets.clone();
+                    config.policy.targets = datasets.clone();
                     events.push(wf(
                         WorkflowLevel::Info,
                         format!("Datasets set to {}", datasets.join(", ")),
@@ -2380,7 +2380,7 @@ async fn run_directive(
             } else {
                 let summary = format!(
                     "Current datasets: {} | USB selector: {}",
-                    config.policy.datasets.join(", "),
+                    config.policy.targets.join(", "),
                     config
                         .usb
                         .device_label
@@ -2560,10 +2560,10 @@ fn resolve_dataset(
     }
     config
         .policy
-        .datasets
+        .targets
         .first()
         .cloned()
-        .ok_or_else(|| "No dataset configured; add one to policy.datasets".to_string())
+        .ok_or_else(|| "No dataset configured; add one to policy.targets".to_string())
 }
 
 fn default_recovery_path(dataset: &str) -> PathBuf {

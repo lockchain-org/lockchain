@@ -1,15 +1,15 @@
 [Unit]
-Description=LockChain ZFS Unlock (%i)
+Description=LockChain Unlock (%i) (legacy unit name: lockchain-zfs@.service)
 After=lockchain-zfs.service
 Requires=lockchain-zfs.service
-ConditionPathExists=/etc/lockchain-zfs.toml
+ConditionPathExists=/etc/lockchain.toml
 
 [Service]
 Type=oneshot
 User=lockchain
 Group=lockchain
-Environment=LOCKCHAIN_CONFIG=/etc/lockchain-zfs.toml
-ExecStart=/usr/bin/lockchain-cli unlock --dataset %i
+Environment=LOCKCHAIN_CONFIG=/etc/lockchain.toml
+ExecStart=/usr/bin/lockchain-cli --config ${LOCKCHAIN_CONFIG} unlock --dataset %I
 RemainAfterExit=yes
 
 [Install]

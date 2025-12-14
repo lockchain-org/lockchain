@@ -314,7 +314,7 @@ fn build_simulation_config(
     key_material: &[u8],
 ) -> LockchainConfig {
     let mut cfg = base.clone();
-    cfg.policy.datasets = vec![dataset.to_string()];
+    cfg.policy.targets = vec![dataset.to_string()];
     cfg.usb.key_hex_path = key_path.to_string_lossy().into_owned();
     if cfg.usb.expected_sha256.is_none() {
         cfg.usb.expected_sha256 = Some(hex::encode(Sha256::digest(key_material)));

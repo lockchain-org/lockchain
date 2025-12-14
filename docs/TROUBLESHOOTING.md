@@ -16,7 +16,7 @@ This guide currently focuses on the ZFS provider path. LUKS troubleshooting will
 **Checks**
 ```bash
 # dataset present in policy
-grep -A3 '\\[policy\\]' /etc/lockchain-zfs.toml
+grep -A3 '\\[policy\\]' /etc/lockchain.toml
 
 # key file exists and is 0400
 ls -l /run/lockchain/key.raw
@@ -33,7 +33,7 @@ lockchain tuning   # alias: lockchain doctor
 - If checksum mismatch, recompute and update config:
   ```bash
   sha256sum /run/lockchain/key.raw
-  sudo sed -i 's/^expected_sha256.*/expected_sha256 = "<digest>"/' /etc/lockchain-zfs.toml
+  sudo sed -i 's/^expected_sha256.*/expected_sha256 = "<digest>"/' /etc/lockchain.toml
   ```
 - Re-run `lockchain unlock --strict-usb` to verify.
 
@@ -47,18 +47,18 @@ lockchain tuning   # alias: lockchain doctor
 **Checks**
 ```bash
 udevadm info --query=property --name=/dev/sdX1 | grep -E 'ID_FS_LABEL|ID_FS_UUID'
-grep -A6 '\\[usb\\]' /etc/lockchain-zfs.toml
+grep -A6 '\\[usb\\]' /etc/lockchain.toml
 journalctl -u lockchain-key-usb.service --since '-5m' --no-pager
 ```
 
 **Fix**
 - Align config with reality (choose one selector):
   ```bash
-  sudo sed -i 's|^device_label.*|device_label = "LOCKCHAIN"|; s|^device_uuid.*|# device_uuid = ""|' /etc/lockchain-zfs.toml
+  sudo sed -i 's|^device_label.*|device_label = "LOCKCHAIN"|; s|^device_uuid.*|# device_uuid = ""|' /etc/lockchain.toml
   ```
 - Give slower media more time:
   ```bash
-  sudo sed -i 's/^mount_timeout_secs.*/mount_timeout_secs = 20/' /etc/lockchain-zfs.toml
+  sudo sed -i 's/^mount_timeout_secs.*/mount_timeout_secs = 20/' /etc/lockchain.toml
   sudo systemctl restart lockchain-key-usb.service
   ```
 
@@ -71,7 +71,7 @@ journalctl -u lockchain-key-usb.service --since '-5m' --no-pager
 **Checks**
 ```bash
 which zfs zpool
-lockchain validate -f /etc/lockchain-zfs.toml
+lockchain validate -f /etc/lockchain.toml
 ```
 
 **Fix**
@@ -86,12 +86,12 @@ lockchain validate -f /etc/lockchain-zfs.toml
 
 ## 4) Systemd units report `inactive (dead)`
 **Symptoms**
-- `systemctl status lockchain-zfs.service` shows immediate exit
+- `systemctl status lockchain.service` shows immediate exit
 
 **Checks**
 ```bash
-journalctl -u lockchain-zfs.service --no-pager --since '-10m'
-lockchain validate -f /etc/lockchain-zfs.toml
+journalctl -u lockchain.service --no-pager --since '-10m'
+lockchain validate -f /etc/lockchain.toml
 ```
 
 **Fix**
@@ -99,7 +99,7 @@ lockchain validate -f /etc/lockchain-zfs.toml
   ```bash
   lockchain repair
   sudo systemctl daemon-reload
-  sudo systemctl restart lockchain-zfs.service lockchain-key-usb.service
+  sudo systemctl restart lockchain.service lockchain-key-usb.service
   ```
 - If config errors persist, run `lockchain tuning` for a guided remediation list.
 
@@ -111,7 +111,7 @@ lockchain validate -f /etc/lockchain-zfs.toml
 
 **Checks**
 ```bash
-grep -A5 '\\[fallback\\]' /etc/lockchain-zfs.toml
+grep -A5 '\\[fallback\\]' /etc/lockchain.toml
 ```
 - Ensure both `passphrase_salt` and `passphrase_xor` are populated.
 
@@ -181,24 +181,24 @@ lockchain tuning   # rebuilds and validates dracut/initramfs assets
 **Checks**
 ```bash
 lockchain --version || lockchain-cli --version
-sudo systemctl status lockchain-zfs.service lockchain-key-usb.service --no-pager
+sudo systemctl status lockchain.service lockchain-key-usb.service --no-pager
 ```
 
 **Fix**
 - Disable services and install the earlier package (replace `<prev>` with the target version):
   ```bash
-  sudo systemctl disable --now lockchain-zfs.service lockchain-key-usb.service
+  sudo systemctl disable --now lockchain.service lockchain-key-usb.service
   sudo apt install ./lockchain-zfs_<prev>_amd64.deb
-  sudo systemctl enable --now lockchain-zfs.service lockchain-key-usb.service
+  sudo systemctl enable --now lockchain.service lockchain-key-usb.service
   ```
 - Validate configuration and integration:
   ```bash
-  lockchain validate -f /etc/lockchain-zfs.toml
+  lockchain validate -f /etc/lockchain.toml
   lockchain tuning
   lockchain self-test --strict-usb
   ```
-- Keep `/etc/lockchain-zfs.toml` and the USB key material intact during rollback; reinstalling does not regenerate keys.
+- Keep `/etc/lockchain.toml` and the USB key material intact during rollback; reinstalling does not regenerate keys.
 
 ---
 
-If the issue persists, capture the command output, `journalctl -u lockchain-*` snippets, and your `/etc/lockchain-zfs.toml` (redact secrets). Open an issue or start a discussion. For security-sensitive findings, follow [`docs/SECURITY.md`](SECURITY.md). Keep the neon low-key, keep the rigor high.
+If the issue persists, capture the command output, `journalctl -u lockchain-*` snippets, and your `/etc/lockchain.toml` (redact secrets). Open an issue or start a discussion. For security-sensitive findings, follow [`docs/SECURITY.md`](SECURITY.md). Keep the neon low-key, keep the rigor high.

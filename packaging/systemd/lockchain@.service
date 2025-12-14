@@ -1,7 +1,7 @@
 [Unit]
-Description=LockChain Unlock (%i) (legacy unit name: lockchain-luks@.service)
-After=lockchain-luks.service
-Requires=lockchain-luks.service
+Description=LockChain Unlock (%i)
+After=lockchain.service
+Requires=lockchain.service
 ConditionPathExists=/etc/lockchain.toml
 
 [Service]

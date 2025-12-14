@@ -1,8 +1,12 @@
 #!/bin/bash
 set -e
 echo "Removing LockChain ZFS..."
+systemctl stop lockchain.service || true
+systemctl disable lockchain.service || true
 systemctl stop lockchain-zfs.service || true
 systemctl disable lockchain-zfs.service || true
+systemctl stop lockchain-luks.service || true
+systemctl disable lockchain-luks.service || true
 systemctl stop lockchain-key-usb.service || true
 systemctl disable lockchain-key-usb.service || true
 systemctl stop run-lockchain.mount || true

@@ -393,8 +393,9 @@ pub fn bootstrap_plan(options: &BootstrapOptions) -> LockchainResult<BootstrapPl
 
     let systemd_source = options.resolved_systemd_source();
     let unit_files = [
-        "lockchain-zfs.service",
-        "lockchain-zfs@.service",
+        "run-lockchain.mount",
+        "lockchain.service",
+        "lockchain@.service",
         "lockchain-key-usb.service",
     ];
     let mut systemd_commands = Vec::new();
@@ -424,15 +425,20 @@ pub fn bootstrap_plan(options: &BootstrapOptions) -> LockchainResult<BootstrapPl
         requires_root: true,
     });
     systemd_commands.push(BootstrapCommand {
+        label: "Enable volatile key staging mount".into(),
+        command: "systemctl enable --now run-lockchain.mount".into(),
+        requires_root: true,
+    });
+    systemd_commands.push(BootstrapCommand {
         label: "Enable base services".into(),
-        command: "systemctl enable --now lockchain-zfs.service lockchain-key-usb.service".into(),
+        command: "systemctl enable --now lockchain.service lockchain-key-usb.service".into(),
         requires_root: true,
     });
     for dataset in &datasets {
         systemd_commands.push(BootstrapCommand {
-            label: format!("Enable dataset unit for {dataset}"),
+            label: format!("Enable unlock unit for {dataset}"),
             command: format!(
-                "systemctl enable \"$(systemd-escape --template=lockchain-zfs@.service \"{dataset}\")\""
+                "systemctl enable \"$(systemd-escape --template=lockchain@.service \"{dataset}\")\""
             ),
             requires_root: true,
         });

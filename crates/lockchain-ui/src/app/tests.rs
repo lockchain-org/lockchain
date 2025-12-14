@@ -1,6 +1,7 @@
 use super::*;
 use lockchain_core::config::{
-    ConfigFormat, CryptoCfg, Fallback, LockchainConfig, LuksCfg, Policy, ProviderCfg, RetryCfg, Usb,
+    ConfigFormat, CryptoCfg, Fallback, LockchainConfig, LuksCfg, Policy, ProviderCfg, RetryCfg,
+    Usb, ZfsCfg,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -27,7 +28,7 @@ fn parse_bool_accepts_common_truthy_values() {
 #[test]
 fn resolve_dataset_prefers_command_line_values() {
     let mut config = dummy_config();
-    config.policy.datasets = vec!["tank/secure".into()];
+    config.policy.targets = vec!["tank/secure".into()];
 
     let mut kv = HashMap::new();
     kv.insert("dataset".to_string(), "tank/alt".to_string());
@@ -39,13 +40,13 @@ fn dummy_config() -> LockchainConfig {
     LockchainConfig {
         provider: ProviderCfg::default(),
         policy: Policy {
-            datasets: vec![],
-            mappings: vec![],
-            zfs_path: None,
-            zpool_path: None,
+            targets: vec![],
             binary_path: None,
             allow_root: false,
+            legacy_zfs_path: None,
+            legacy_zpool_path: None,
         },
+        zfs: ZfsCfg::default(),
         crypto: CryptoCfg { timeout_secs: 5 },
         luks: LuksCfg::default(),
         usb: Usb {

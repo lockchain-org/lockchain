@@ -14,7 +14,7 @@ captures the baseline automatically.
 EOF
 }
 
-CONFIG="${LOCKCHAIN_CONFIG:-/etc/lockchain-zfs.toml}"
+CONFIG="${LOCKCHAIN_CONFIG:-/etc/lockchain.toml}"
 DATASET=""
 NOTE=""
 STRICT=false

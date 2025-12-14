@@ -48,16 +48,16 @@ pub fn repair_environment(config: &LockchainConfig) -> LockchainResult<WorkflowR
     } else if let Some(systemctl) = systemctl_path() {
         reload_systemd(&systemctl, &mut events);
         enable_unit(&systemctl, "run-lockchain.mount", &mut events);
-        enable_unit(&systemctl, "lockchain-zfs.service", &mut events);
+        enable_unit(&systemctl, "lockchain.service", &mut events);
         enable_unit(&systemctl, "lockchain-key-usb.service", &mut events);
-        for dataset in &config.policy.datasets {
+        for dataset in &config.policy.targets {
             if let Some(unit) = escaped_dataset_unit(dataset) {
                 enable_unit(&systemctl, &unit, &mut events);
             } else {
                 events.push(event(
                     WorkflowLevel::Warn,
                     format!(
-                        "Unable to derive systemd instance name for dataset {dataset}; run `systemctl enable lockchain-zfs@$(systemd-escape --template=lockchain-zfs@.service {dataset})` manually."
+                        "Unable to derive systemd instance name for dataset {dataset}; run `systemctl enable lockchain@$(systemd-escape --template=lockchain@.service {dataset})` manually."
                     ),
                 ));
             }
@@ -84,7 +84,7 @@ fn install_mount_unit(systemd_dir: &Path, events: &mut Vec<WorkflowEvent>) -> Lo
 Description=LockChain volatile key staging mount
 DefaultDependencies=no
 After=local-fs.target
-Before=lockchain-key-usb.service lockchain-zfs.service
+Before=lockchain-key-usb.service lockchain.service lockchain@.service
 ConditionPathExists=/run
 
 [Mount]
@@ -153,7 +153,7 @@ fn enable_unit(systemctl: &Path, unit: &str, events: &mut Vec<WorkflowEvent>) {
 fn escaped_dataset_unit(dataset: &str) -> Option<String> {
     if let Some(path) = systemd_escape_path() {
         if let Ok(output) = Command::new(path)
-            .args(["--template=lockchain-zfs@.service", dataset])
+            .args(["--template=lockchain@.service", dataset])
             .output()
         {
             if output.status.success() {
@@ -202,7 +202,7 @@ fn systemd_escape_path() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{CryptoCfg, Fallback, LockchainConfig, Policy, RetryCfg, Usb};
+    use crate::config::{CryptoCfg, Fallback, LockchainConfig, Policy, RetryCfg, Usb, ZfsCfg};
     use std::env;
     use tempfile::tempdir;
 
@@ -233,13 +233,13 @@ mod tests {
         LockchainConfig {
             provider: crate::config::ProviderCfg::default(),
             policy: Policy {
-                datasets: vec!["tank/secure".into()],
-                mappings: Vec::new(),
-                zfs_path: None,
-                zpool_path: None,
+                targets: vec!["tank/secure".into()],
                 binary_path: None,
                 allow_root: false,
+                legacy_zfs_path: None,
+                legacy_zpool_path: None,
             },
+            zfs: ZfsCfg::default(),
             crypto: CryptoCfg { timeout_secs: 5 },
             luks: crate::config::LuksCfg::default(),
             usb: Usb {

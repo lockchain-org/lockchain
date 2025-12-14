@@ -70,12 +70,27 @@ Root unlock adds initrd integration (dracut + initramfs-tools) on top of the pro
 LockChain uses a unified config file with provider selection:
 
 - Default: `/etc/lockchain.toml`
-- Select provider via `[provider] kind = "zfs" | "luks" | "auto"`.
-- Configure targets via:
-  - ZFS: `[policy] datasets = [...]` (plus optional `policy.zfs_path` / `policy.zpool_path`)
-  - LUKS: `[policy] mappings = [...]` (plus optional `[luks] cryptsetup_path = ...`)
+- Select provider via `[provider] type = "zfs" | "luks" | "auto"` (`kind` is accepted as a legacy alias).
+- Configure targets via `[policy] targets = [...]` (`datasets`, `mappings`, and `volumes` are accepted as legacy aliases).
+- Provider-specific sections:
+  - ZFS: `[zfs] zfs_path = ...`, `[zfs] zpool_path = ...`
+  - LUKS: `[luks] cryptsetup_path = ...`, `[luks] crypttab_path = ...`
 
 Legacy config files are still supported for now (and will be auto-discovered when `/etc/lockchain.toml` is missing):
 
 - ZFS: `/etc/lockchain-zfs.toml` (template: `packaging/systemd/lockchain-zfs.toml`)
 - LUKS: `/etc/lockchain-luks.toml` (template: `packaging/systemd/lockchain-luks.toml`)
+
+Example configs:
+
+- Unified template: `packaging/systemd/lockchain.toml`
+- ZFS: `docs/examples/lockchain-zfs.toml`
+- LUKS: `docs/examples/lockchain-luks.toml`
+
+### Migration Notes
+
+- Preferred path: rename your config to `/etc/lockchain.toml`.
+- Key migrations:
+  - `provider.kind` → `provider.type` (legacy alias retained)
+  - `policy.datasets` / `policy.mappings` → `policy.targets` (legacy aliases retained)
+  - `policy.zfs_path` / `policy.zpool_path` → `[zfs] zfs_path` / `[zfs] zpool_path` (legacy keys still accepted)

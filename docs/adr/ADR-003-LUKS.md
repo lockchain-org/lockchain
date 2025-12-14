@@ -62,7 +62,7 @@ vault UUID=<luks-uuid> none luks,noauto,keyscript=/usr/lib/lockchain/lockchain-k
 Notes:
 
 - `noauto` prevents boot stalls if the vault stick is absent.
-- `lockchain-luks@.service` (packaging placeholder) is intended to unlock a single mapping on demand.
+- `lockchain@.service` (provider selected by config) is intended to unlock a single mapping on demand.
 
 ## Consequences
 

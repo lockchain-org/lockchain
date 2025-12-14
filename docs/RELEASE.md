@@ -41,7 +41,7 @@ Install the generated package to confirm the end-to-end experience:
 
 ```bash
 sudo apt install ./target/debian/lockchain-zfs_*_amd64.deb
-sudo systemctl status lockchain-zfs.service
+sudo systemctl status lockchain.service
 lockchain-ui  # launch the Control Deck
 ```
 
@@ -74,4 +74,4 @@ sha256sum --check SHA256SUMS
 sudo apt install ./lockchain-zfs_0.2.1-1_amd64.deb
 ```
 
-Run `lockchain tuning` (aliases: `lockchain self-heal`, `lockchain doctor`) and `lockchain repair` after installation to ensure the mount/unlock units are in place, then confirm `sudo systemctl status lockchain-zfs.service lockchain-key-usb.service`. The Control Deck, CLI, and daemon should operate without additional configuration beyond the standard LockChain config file.
+Run `lockchain tuning` (aliases: `lockchain self-heal`, `lockchain doctor`) and `lockchain repair` after installation to ensure the mount/unlock units are in place, then confirm `sudo systemctl status lockchain.service lockchain-key-usb.service`. The Control Deck, CLI, and daemon should operate without additional configuration beyond the standard LockChain config file.

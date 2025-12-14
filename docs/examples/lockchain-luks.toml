@@ -1,7 +1,7 @@
-# LockChain configuration template (LUKS provider).
+# Example LockChain configuration for a LUKS host.
 #
 # Copy to /etc/lockchain.toml and adjust:
-#   - policy.targets
+#   - policy.targets (crypt mapping names, e.g. cryptroot, vault)
 #   - luks.cryptsetup_path / luks.crypttab_path
 #   - usb.device_label and/or usb.device_uuid
 #   - usb.expected_sha256 after provisioning
@@ -10,8 +10,8 @@
 type = "luks"
 
 [policy]
-# Crypttab-style mapping names (e.g. cryptroot, vault, data).
 targets = ["cryptroot"]
+allow_root = false
 
 [zfs]
 # zfs_path = "/usr/sbin/zfs"

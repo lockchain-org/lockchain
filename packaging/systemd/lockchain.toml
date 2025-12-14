@@ -1,25 +1,27 @@
-# LockChain configuration template (LUKS provider).
+# LockChain unified configuration template.
 #
 # Copy to /etc/lockchain.toml and adjust:
+#   - provider.type
 #   - policy.targets
-#   - luks.cryptsetup_path / luks.crypttab_path
 #   - usb.device_label and/or usb.device_uuid
 #   - usb.expected_sha256 after provisioning
 
 [provider]
-type = "luks"
+# zfs | luks (auto is supported but explicit is recommended for systemd-managed hosts)
+type = "zfs"
 
 [policy]
-# Crypttab-style mapping names (e.g. cryptroot, vault, data).
-targets = ["cryptroot"]
+# Managed targets: datasets for ZFS, crypt mappings for LUKS.
+targets = ["rpool/ROOT/ubuntu"]
+allow_root = false
 
 [zfs]
-# zfs_path = "/usr/sbin/zfs"
-# zpool_path = "/usr/sbin/zpool"
+zfs_path = "/usr/sbin/zfs"
+zpool_path = "/usr/sbin/zpool"
 
 [luks]
-cryptsetup_path = "/usr/sbin/cryptsetup"
-crypttab_path = "/etc/crypttab"
+# cryptsetup_path = "/usr/sbin/cryptsetup"
+# crypttab_path = "/etc/crypttab"
 
 [crypto]
 timeout_secs = 10

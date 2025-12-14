@@ -1,9 +1,9 @@
 [Unit]
-Description=LockChain Daemon (legacy unit name: lockchain-luks.service)
+Description=LockChain Daemon
 After=run-lockchain.mount network-online.target
 Wants=network-online.target run-lockchain.mount
 Requires=run-lockchain.mount
-Conflicts=lockchain.service lockchain-zfs.service
+Conflicts=lockchain-zfs.service lockchain-luks.service
 ConditionPathExists=/etc/lockchain.toml
 
 [Service]

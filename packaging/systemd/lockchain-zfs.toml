@@ -1,15 +1,24 @@
-# LockChain ZFS configuration template.
+# LockChain configuration template (ZFS provider).
 #
-# Copy to /etc/lockchain-zfs.toml and adjust:
-#   - policy.datasets
+# Copy to /etc/lockchain.toml and adjust:
+#   - policy.targets
 #   - usb.device_label and/or usb.device_uuid
 #   - usb.expected_sha256 after provisioning
 
+[provider]
+type = "zfs"
+
 [policy]
-datasets = ["rpool/ROOT/ubuntu"]
+targets = ["rpool/ROOT/ubuntu"]
 allow_root = false
+
+[zfs]
 zfs_path = "/usr/sbin/zfs"
 zpool_path = "/usr/sbin/zpool"
+
+[luks]
+# cryptsetup_path = "/usr/sbin/cryptsetup"
+# crypttab_path = "/etc/crypttab"
 
 [crypto]
 timeout_secs = 10

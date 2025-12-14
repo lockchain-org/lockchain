@@ -7,7 +7,7 @@ _Security chain for encrypted storage_
 
 > **Preview (v0.2.1):** This build targets lab and UAT environments. Expect fast-moving changes and breaking adjustments while we finish the 0.2 line. Keep keys backed up and test on non-production pools first.
 
-LockChain delivers repeatable, headless unlocks for encrypted storage via pluggable providers (ZFS today, LUKS in progress) with a single operator experience: shared workflows, shared observability, and a minimal early-boot footprint.
+LockChain delivers repeatable, headless unlocks for encrypted storage via pluggable providers (ZFS today, LUKS scaffolding underway) with a single operator experience: shared workflows, shared observability, and a minimal early-boot footprint.
 
 https://github.com/user-attachments/assets/e0b79a1e-c088-4b47-a06e-27b238ee021d
 
@@ -40,7 +40,7 @@ git clone https://github.com/lockchain-org/lockchain.git
 cd lockchain
 sudo ./lockchain-install.sh
 ```
-What happens: dependencies installed, binaries built and installed to `/usr/local/bin` (so you can run `lockchain-ui`, `lockchain-cli`, etc. from anywhere), `/etc/lockchain-zfs.toml` staged, `zfs allow load-key,key` delegated, systemd units enabled. No key material is forged yet.
+What happens: dependencies installed, binaries built and installed to `/usr/local/bin` (so you can run `lockchain-ui`, `lockchain-cli`, etc. from anywhere), `/etc/lockchain.toml` staged (provider set to `zfs`), `zfs allow load-key,key` delegated, systemd units enabled. No key material is forged yet.
 
 **2) Forge the vault key on your USB (adjust dataset/device)**
 ```bash
@@ -69,9 +69,9 @@ Pair with the Control Deck (`lockchain-ui`) for a cockpit view, or let `lockchai
 
 Prefer the manual lane? Swap step 1 for:
 ```bash
-sudo install -Dm640 packaging/systemd/lockchain-zfs.toml /etc/lockchain-zfs.toml
+sudo install -Dm640 packaging/systemd/lockchain.toml /etc/lockchain.toml
 cargo test -p lockchain-zfs --test unlock_smoke   # fake provider; no root
-lockchain validate -f /etc/lockchain-zfs.toml
+lockchain validate -f /etc/lockchain.toml
 ```
 Then resume at step 2.
 
@@ -91,13 +91,25 @@ Then resume at step 2.
 
 ## Configuration Blueprint
 
-ZFS configuration (LUKS uses a separate template at `packaging/systemd/lockchain-luks.toml`).
+Unified configuration lives at `/etc/lockchain.toml` (templates: `packaging/systemd/lockchain.toml`, examples: `docs/examples/lockchain-zfs.toml`, `docs/examples/lockchain-luks.toml`).
 
 ```toml
+[provider]
+# zfs | luks | auto
+type = "zfs"
+
 [policy]
-datasets = ["rpool/ROOT/blackice"]
+# Managed targets: datasets for ZFS, crypt mappings for LUKS.
+targets = ["rpool/ROOT/blackice"]
+allow_root = false
+
+[zfs]
 zfs_path = "/sbin/zfs"
 zpool_path = "/sbin/zpool"
+
+[luks]
+# cryptsetup_path = "/usr/sbin/cryptsetup"
+# crypttab_path = "/etc/crypttab"
 
 [crypto]
 timeout_secs = 10
@@ -135,7 +147,7 @@ jitter_ratio = 0.1
 | `LOCKCHAIN_LOG_ROOT` | Relocate performance profiling logs | Defaults to the platform data dir (`~/.local/share/lockchain/logs/perf`), falling back to `/var/log/lockchain/logs/perf`. |
 | `LOCKCHAIN_LOG_EXPORT_DIR` | Override where log bundles are written | Defaults to the OS downloads directory, or the perf log root when unavailable. |
 | `LOCKCHAIN_KEY_USB_MOUNTS_PATH` | Provide a mounts fixture for testing | Feeds the USB watcher with synthetic data. |
-| `LOCKCHAIN_CONFIG` | Run a surface against a different config | ZFS surfaces default to `/etc/lockchain-zfs.toml` (LUKS wiring pending). |
+| `LOCKCHAIN_CONFIG` | Run a surface against a different config | Defaults to `/etc/lockchain.toml` (legacy config paths are auto-discovered when missing). |
 | `LOCKCHAIN_HEALTH_ADDR` | Rebind the daemon health endpoint | Default `127.0.0.1:8787`. |
 
 ## Console Commands
@@ -147,7 +159,7 @@ jitter_ratio = 0.1
 - `lockchain self-test` — exercise an ephemeral pool to prove the current key still opens the vault.  
 - `lockchain unlock --prompt-passphrase` — partner with `systemd-ask-password` when policy allows.  
 - `lockchain profile-unlock` — capture unlock timings and append to the performance log (baseline on first success).  
-- `lockchain status` — live keystatus for every dataset in `policy.datasets`.  
+- `lockchain status` — live keystatus for every target in `policy.targets`.  
 - `lockchain list-keys` — report encryption roots vs. datasets.  
 - `lockchain-key-usb` — enforce USB insertion/removal rules, heal legacy key files.  
 - `lockchain tui` — keyboard-only Control Deck for datasets, retries, and passphrases.  

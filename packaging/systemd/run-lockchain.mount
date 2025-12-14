@@ -2,7 +2,7 @@
 Description=LockChain volatile key staging mount
 DefaultDependencies=no
 After=local-fs.target
-Before=lockchain-key-usb.service lockchain-zfs.service lockchain-luks.service
+Before=lockchain-key-usb.service lockchain.service lockchain@.service lockchain-zfs.service lockchain-zfs@.service lockchain-luks.service lockchain-luks@.service
 ConditionPathExists=/run
 
 [Mount]

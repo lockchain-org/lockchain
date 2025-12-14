@@ -66,7 +66,7 @@ struct Cli {
 enum Commands {
     /// Provision a USB token with raw key material and refresh initramfs assets.
     Init {
-        /// Target dataset; defaults to the first entry in policy.datasets.
+        /// Target dataset; defaults to the first entry in policy.targets.
         dataset: Option<String>,
 
         /// USB block device (e.g. /dev/sdb1). When omitted, autodetect via label/UUID.
@@ -123,7 +123,7 @@ enum Commands {
 
     /// Unlock an encrypted dataset (and its descendants).
     Unlock {
-        /// Target dataset; defaults to the first entry in policy.datasets.
+        /// Target dataset; defaults to the first entry in policy.targets.
         dataset: Option<String>,
 
         /// Require USB key material and skip fallback handling.
@@ -145,7 +145,7 @@ enum Commands {
 
     /// Profile unlock timings and append them to the performance log.
     ProfileUnlock {
-        /// Target dataset; defaults to the first entry in policy.datasets.
+        /// Target dataset; defaults to the first entry in policy.targets.
         dataset: Option<String>,
 
         /// Require USB key material and skip fallback handling.
@@ -171,7 +171,7 @@ enum Commands {
 
     /// Perform a self-test using an ephemeral ZFS pool.
     SelfTest {
-        /// Dataset to validate; defaults to the first entry in policy.datasets.
+        /// Dataset to validate; defaults to the first entry in policy.targets.
         dataset: Option<String>,
 
         /// Require the USB token and skip fallback handling during the drill.
@@ -213,7 +213,7 @@ enum Commands {
 
     /// Derive the fallback key and write it to disk (emergency only).
     Breakglass {
-        /// Dataset to target; defaults to the first entry in policy.datasets.
+        /// Dataset to target; defaults to the first entry in policy.targets.
         dataset: Option<String>,
 
         /// File path to write the derived key material to.
@@ -416,7 +416,7 @@ fn run() -> Result<()> {
                             "dataset entries must look like pool/dataset (received `{dataset}`)"
                         );
                     }
-                    config.policy.datasets = datasets.clone();
+                    config.policy.targets = datasets.clone();
                     events.push(format!("Datasets updated: {}", datasets.join(", ")));
                     changed = true;
                 }
@@ -505,24 +505,23 @@ fn run() -> Result<()> {
 
             let issues = cfg.validate();
             if issues.is_empty() {
-                match cfg.provider.kind {
+                match cfg.provider.r#type {
                     ProviderKind::Zfs => {
                         println!(
-                            "Configuration valid (provider=zfs, {} datasets).",
-                            cfg.policy.datasets.len()
+                            "Configuration valid (provider=zfs, {} targets).",
+                            cfg.policy.targets.len()
                         );
                     }
                     ProviderKind::Luks => {
                         println!(
-                            "Configuration valid (provider=luks, {} mappings).",
-                            cfg.policy.mappings.len()
+                            "Configuration valid (provider=luks, {} targets).",
+                            cfg.policy.targets.len()
                         );
                     }
                     ProviderKind::Auto => {
                         println!(
-                            "Configuration valid (provider=auto, {} datasets, {} mappings).",
-                            cfg.policy.datasets.len(),
-                            cfg.policy.mappings.len()
+                            "Configuration valid (provider=auto, {} targets).",
+                            cfg.policy.targets.len()
                         );
                     }
                 }
@@ -1047,12 +1046,12 @@ fn print_plan_plain(plan: &BootstrapPlan) {
 /// Emit a short snapshot of the managed configuration defaults.
 fn print_settings_snapshot(config: &LockchainConfig) {
     println!("Current Settings");
-    println!("  Datasets:");
-    if config.policy.datasets.is_empty() {
+    println!("  Targets:");
+    if config.policy.targets.is_empty() {
         println!("    (none configured)");
     } else {
-        for dataset in &config.policy.datasets {
-            println!("    - {dataset}");
+        for target in &config.policy.targets {
+            println!("    - {target}");
         }
     }
     let selector = config
@@ -1138,10 +1137,10 @@ fn resolve_dataset(dataset: Option<String>, policy: &Policy) -> Result<String> {
         return Ok(ds);
     }
     policy
-        .datasets
+        .targets
         .first()
         .cloned()
-        .ok_or_else(|| anyhow::anyhow!("no datasets configured in policy.datasets"))
+        .ok_or_else(|| anyhow::anyhow!("no targets configured in policy.targets"))
 }
 
 /// Pick a provider-aware target from CLI input or fall back to the first policy entry.
@@ -1155,20 +1154,14 @@ fn resolve_target(
     }
 
     match provider {
-        ProviderKind::Zfs => config
+        ProviderKind::Zfs | ProviderKind::Luks => config
             .policy
-            .datasets
+            .targets
             .first()
             .cloned()
-            .ok_or_else(|| anyhow::anyhow!("no datasets configured in policy.datasets")),
-        ProviderKind::Luks => config
-            .policy
-            .mappings
-            .first()
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("no mappings configured in policy.mappings")),
+            .ok_or_else(|| anyhow::anyhow!("no targets configured in policy.targets")),
         ProviderKind::Auto => Err(anyhow::anyhow!(
-            "provider.kind=auto cannot be used without resolving to a concrete provider"
+            "provider.type=auto cannot be used without resolving to a concrete provider"
         )),
     }
 }

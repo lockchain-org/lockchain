@@ -14,5 +14,5 @@ update-initramfs -u || true
 systemctl daemon-reload || true
 systemctl enable run-lockchain.mount || true
 systemctl start run-lockchain.mount || true
-systemctl enable lockchain-zfs.service || true
+systemctl enable lockchain.service || true
 systemctl enable lockchain-key-usb.service || true

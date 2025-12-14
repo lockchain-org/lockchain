@@ -1,9 +1,10 @@
 [Unit]
-Description=LockChain ZFS Daemon
+Description=LockChain Daemon (legacy unit name: lockchain-zfs.service)
 After=run-lockchain.mount network-online.target
 Wants=network-online.target run-lockchain.mount
 Requires=run-lockchain.mount
-ConditionPathExists=/etc/lockchain-zfs.toml
+Conflicts=lockchain.service lockchain-luks.service
+ConditionPathExists=/etc/lockchain.toml
 
 [Service]
 Type=simple
@@ -12,7 +13,7 @@ Group=lockchain
 WorkingDirectory=/var/lib/lockchain
 RuntimeDirectory=lockchain
 RuntimeDirectoryMode=0750
-Environment=LOCKCHAIN_CONFIG=/etc/lockchain-zfs.toml
+Environment=LOCKCHAIN_CONFIG=/etc/lockchain.toml
 Environment=LOCKCHAIN_HEALTH_ADDR=127.0.0.1:8787
 ExecStart=/usr/bin/lockchain-daemon
 Restart=on-failure

@@ -10,7 +10,7 @@ Early-boot unlocks depend on loader assets, systemd units, and USB state that ca
 ## Forces
 
 - **Early-boot guarantees** — Dracut/initramfs-tools assets must stay in sync with the configured key path and ZFS roots.  
-- **Single source of truth** — Keep configuration updates (expected key checksum, USB UUID) authoritative in `/etc/lockchain-zfs.toml`.  
+- **Single source of truth** — Keep configuration updates (expected key checksum, USB UUID) authoritative in `/etc/lockchain.toml`.  
 - **Minimal churn** — Only touch what is required to restore readiness; avoid re-forging keys or rewriting datasets.  
 - **Deterministic observability** — Emit structured workflow events and sample logs in one pass to reduce operator guesswork.
 
@@ -24,7 +24,7 @@ Adopt a unified tuning/self-heal workflow with the following sequencing and boun
 4. **Keylocation reconciliation** — For each encryption root, set `keylocation=file://…` to the configured path.  
 5. **Boot assets** — Reconcile dracut/initramfs assets via `repair_boot_assets`; log warnings on failure instead of silently continuing.  
 6. **USB identity hardening** — If label is set but UUID is missing and discoverable, persist the UUID to tighten future matches.  
-7. **Service health** — Audit systemd units (`lockchain-zfs.service`, `lockchain-key-usb.service`, dataset units) via `systemctl show`; surface remedies when not loaded/active/enabled.  
+7. **Service health** — Audit systemd units (`lockchain.service`, `lockchain-key-usb.service`, unlock units) via `systemctl show`; surface remedies when not loaded/active/enabled.  
 8. **Journal sampling** — Tail recent logs for the services, filter noise, and elevate errors/warnings.  
 9. **Initramfs tooling presence** — Detect `dracut`/`update-initramfs`; warn if neither is available.  
 10. **Keystatus snapshot** — Query provider keystatus for managed datasets to highlight locked descendants.  

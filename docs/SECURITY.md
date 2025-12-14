@@ -32,7 +32,7 @@ Release assets are signed in CI; verify `SHA256SUMS` and the detached signatures
 ## Hardening Checklist
 
 1. **Service identity** — Run all units as the dedicated `lockchain` user. Packaging and install scripts create the account and `/var/lib/lockchain`.  
-2. **Config custody** — `/etc/lockchain-zfs.toml` should be `640` owned by `root:lockchain`; avoid world-readable copies or VCS check-ins.  
+2. **Config custody** — `/etc/lockchain.toml` should be `640` owned by `root:lockchain`; avoid world-readable copies or VCS check-ins.  
 3. **Key hygiene** — Keys live at `/run/lockchain/key.raw` with `0400`. Do not stage keys in home directories. Keep recovery keys offline and treat Control Deck QR exports as sensitive.  
 4. **USB enforcement** — Keep `lockchain-key-usb` enabled; bind tokens by UUID or label and set `usb.expected_sha256`. Prefer read-only mounts in policy.  
 5. **Initramfs integrity** — After kernel or policy changes, run `lockchain tuning` (or the Control Deck Tuning directive) to rebuild and audit dracut/initramfs-tools assets.  
@@ -64,7 +64,7 @@ lockchain ALL=(root) NOPASSWD:/usr/sbin/zfs load-key *, \
 Use only with explicit authorisation. All flows emit `[LC4000]` audit events.
 
 ```bash
-lockchain validate -f /etc/lockchain-zfs.toml
+lockchain validate -f /etc/lockchain.toml
 lockchain breakglass tank/secure --output /root/tank-secure.key
 ```
 
