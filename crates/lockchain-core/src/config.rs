@@ -328,37 +328,20 @@ pub struct Policy {
 }
 
 /// Provider selection configuration.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub struct ProviderCfg {
     #[serde(default)]
     pub kind: ProviderKind,
 }
 
-impl Default for ProviderCfg {
-    fn default() -> Self {
-        Self {
-            kind: ProviderKind::Auto,
-        }
-    }
-}
-
 /// LUKS provider configuration (ADR-003 follow-ups).
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub struct LuksCfg {
     #[serde(default)]
     pub cryptsetup_path: Option<String>,
 
     #[serde(default)]
     pub crypttab_path: Option<String>,
-}
-
-impl Default for LuksCfg {
-    fn default() -> Self {
-        Self {
-            cryptsetup_path: None,
-            crypttab_path: None,
-        }
-    }
 }
 
 /// Timeouts and other crypto-related knobs for CLI interactions.

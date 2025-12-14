@@ -11,17 +11,12 @@ pub mod zfs;
 /// Identifies which storage provider a workflow or UI context is operating on.
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
 pub enum ProviderKind {
     Zfs,
     Luks,
     /// Auto-detect which provider to use from configuration and host tooling.
+    #[default]
     Auto,
-}
-
-impl Default for ProviderKind {
-    fn default() -> Self {
-        ProviderKind::Auto
-    }
 }
