@@ -1,0 +1,17 @@
+[Unit]
+Description=LockChain key loader (v{{VERSION}})
+DefaultDependencies=no
+After=systemd-udev-settle.service run-lockchain.mount
+Before=zfs-load-module.service zfs-load-key.service initrd-root-fs.target
+Wants=run-lockchain.mount systemd-udev-settle.service zfs-load-module.service zfs-load-key.service
+Requires=run-lockchain.mount
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/sbin/{{SCRIPT_NAME}}
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=initrd-root-fs.target

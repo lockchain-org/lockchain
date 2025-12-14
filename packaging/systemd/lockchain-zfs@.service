@@ -1,0 +1,16 @@
+[Unit]
+Description=LockChain ZFS Unlock (%i)
+After=lockchain-zfs.service
+Requires=lockchain-zfs.service
+ConditionPathExists=/etc/lockchain-zfs.toml
+
+[Service]
+Type=oneshot
+User=lockchain
+Group=lockchain
+Environment=LOCKCHAIN_CONFIG=/etc/lockchain-zfs.toml
+ExecStart=/usr/bin/lockchain-cli unlock --dataset %i
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

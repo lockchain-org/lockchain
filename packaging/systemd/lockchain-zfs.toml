@@ -1,0 +1,37 @@
+# LockChain ZFS configuration template.
+#
+# Copy to /etc/lockchain-zfs.toml and adjust:
+#   - policy.datasets
+#   - usb.device_label and/or usb.device_uuid
+#   - usb.expected_sha256 after provisioning
+
+[policy]
+datasets = ["rpool/ROOT/ubuntu"]
+allow_root = false
+zfs_path = "/usr/sbin/zfs"
+zpool_path = "/usr/sbin/zpool"
+
+[crypto]
+timeout_secs = 10
+
+[usb]
+key_hex_path = "/run/lockchain/key.raw"
+expected_sha256 = ""
+device_label = "LOCKCHAIN"
+# device_uuid = "0000-0000"
+device_key_path = "key.raw"
+mount_timeout_secs = 10
+
+[fallback]
+enabled = true
+askpass = true
+askpass_path = "/usr/bin/systemd-ask-password"
+passphrase_salt = ""
+passphrase_xor = ""
+passphrase_iters = 250000
+
+[retry]
+max_attempts = 3
+base_delay_ms = 500
+max_delay_ms = 5000
+jitter_ratio = 0.1

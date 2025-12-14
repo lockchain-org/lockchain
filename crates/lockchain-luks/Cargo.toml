@@ -1,0 +1,9 @@
+[package]
+name = "lockchain-luks"
+version = "0.2.1"
+edition = "2021"
+
+[dependencies]
+lockchain-core = { path = "../lockchain-core" }
+lockchain-provider = { path = "../lockchain-provider" }
+log = "0.4"

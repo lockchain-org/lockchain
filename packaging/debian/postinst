@@ -1,0 +1,18 @@
+#!/bin/bash
+set -e
+if ! getent group lockchain >/dev/null; then
+  groupadd --system lockchain
+fi
+if ! id -u lockchain >/dev/null 2>&1; then
+  useradd --system --home /var/lib/lockchain --shell /usr/sbin/nologin \
+    --gid lockchain lockchain
+fi
+install -d -o lockchain -g lockchain /var/lib/lockchain || true
+install -d -m 0755 /run/lockchain || true
+
+update-initramfs -u || true
+systemctl daemon-reload || true
+systemctl enable run-lockchain.mount || true
+systemctl start run-lockchain.mount || true
+systemctl enable lockchain-zfs.service || true
+systemctl enable lockchain-key-usb.service || true

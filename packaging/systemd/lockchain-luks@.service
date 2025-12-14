@@ -1,0 +1,17 @@
+[Unit]
+Description=LockChain LUKS Unlock (%i) (placeholder)
+After=lockchain-luks.service
+Requires=lockchain-luks.service
+ConditionPathExists=/etc/lockchain-luks.toml
+
+[Service]
+Type=oneshot
+User=lockchain
+Group=lockchain
+Environment=LOCKCHAIN_CONFIG=/etc/lockchain-luks.toml
+# Future: `lockchain-cli luks unlock --mapping %i`
+ExecStart=/usr/bin/lockchain-cli luks unlock --mapping %i
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

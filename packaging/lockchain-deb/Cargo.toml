@@ -1,0 +1,45 @@
+[package]
+name = "lockchain-deb"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Debian packaging manifest for LockChain (ZFS provider)."
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[package.metadata.deb]
+name = "lockchain-zfs"
+maintainer = "LockChain Team <dev@lockchain.io>"
+depends = "zfsutils-linux, systemd, libudev1, libvulkan1, libdrm2, libxkbcommon0, libgtk-3-0, libglib2.0-0, libfontconfig1, libfreetype6"
+section = "utils"
+priority = "optional"
+revision = "1"
+extended-description = """
+LockChain (ZFS provider) brings USB-backed, cyberpunk-inspired unlocking flows to encrypted ZFS pools. \
+The bundle includes the Control Deck UI, daemon, CLI tooling, udev watcher, and initramfs hooks \
+to normalise key material, drill self-tests, and automate unlock during boot.
+"""
+assets = [
+    ["../../target/release/lockchain-cli", "usr/bin/lockchain-cli", "755"],
+    ["../../target/release/lockchain-daemon", "usr/bin/lockchain-daemon", "755"],
+    ["../../target/release/lockchain-ui", "usr/bin/lockchain-ui", "755"],
+    ["../../target/release/lockchain-key-usb", "usr/bin/lockchain-key-usb", "755"],
+    ["../systemd/lockchain-zfs.service", "lib/systemd/system/lockchain-zfs.service", "644"],
+    ["../systemd/lockchain-zfs@.service", "lib/systemd/system/lockchain-zfs@.service", "644"],
+    ["../systemd/lockchain-key-usb.service", "lib/systemd/system/lockchain-key-usb.service", "644"],
+    ["../systemd/run-lockchain.mount", "lib/systemd/system/run-lockchain.mount", "644"],
+    ["../udev/70-lockchain.rules", "lib/udev/rules.d/70-lockchain.rules", "644"],
+    ["../../crates/lockchain-core/templates/lockchain-load-key.sh", "usr/lib/dracut/modules.d/90lockchain/lockchain-load-key.sh", "755"],
+    ["../../crates/lockchain-core/templates/lockchain-module-setup.sh", "usr/lib/dracut/modules.d/90lockchain/module-setup.sh", "755"],
+    ["../../crates/lockchain-core/templates/lockchain-load-key.conf", "usr/lib/dracut/modules.d/90lockchain/lockchain-load-key.conf", "644"],
+    ["../../crates/lockchain-core/templates/lockchain-zfs-load-module.conf", "usr/lib/dracut/modules.d/90lockchain/lockchain-zfs-load-module.conf", "644"],
+    ["../../crates/lockchain-core/templates/lockchain-load-key.service", "usr/lib/dracut/modules.d/90lockchain/lockchain-load-key.service", "644"],
+]
+maintainer-scripts = { postinst = "../debian/postinst", prerm = "../debian/prerm" }
+conf-files = [
+    "/usr/lib/dracut/modules.d/90lockchain/lockchain-load-key.conf",
+    "/usr/lib/dracut/modules.d/90lockchain/lockchain-zfs-load-module.conf",
+]

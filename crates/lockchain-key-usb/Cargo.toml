@@ -1,0 +1,17 @@
+[package]
+name = "lockchain-key-usb"
+version = "0.2.1"
+edition = "2021"
+
+[dependencies]
+lockchain-core = { path = "../lockchain-core" }
+anyhow = "1"
+clap = { version = "4.5", features = ["derive"] }
+env_logger = "0.10"
+log = "0.4"
+udev = "0.6"
+sha2 = "0.10"
+hex = "0.4"
+
+[dev-dependencies]
+tempfile = "3"

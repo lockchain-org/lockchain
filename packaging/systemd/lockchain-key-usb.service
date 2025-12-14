@@ -1,0 +1,18 @@
+[Unit]
+Description=LockChain USB Key Watcher
+After=systemd-udev-settle.service run-lockchain.mount local-fs.target
+Wants=systemd-udev-settle.service run-lockchain.mount
+Requires=run-lockchain.mount
+ConditionPathExists=/etc/lockchain-zfs.toml
+
+[Service]
+Type=simple
+User=root
+Group=root
+Environment=LOCKCHAIN_CONFIG=/etc/lockchain-zfs.toml
+ExecStart=/usr/bin/lockchain-key-usb --config ${LOCKCHAIN_CONFIG}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

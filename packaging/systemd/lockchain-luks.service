@@ -1,0 +1,23 @@
+[Unit]
+Description=LockChain LUKS Daemon (placeholder)
+After=run-lockchain.mount network-online.target
+Wants=network-online.target run-lockchain.mount
+Requires=run-lockchain.mount
+ConditionPathExists=/etc/lockchain-luks.toml
+
+[Service]
+Type=simple
+User=lockchain
+Group=lockchain
+WorkingDirectory=/var/lib/lockchain
+RuntimeDirectory=lockchain
+RuntimeDirectoryMode=0750
+Environment=LOCKCHAIN_CONFIG=/etc/lockchain-luks.toml
+Environment=LOCKCHAIN_HEALTH_ADDR=127.0.0.1:8788
+# Future: unified daemon that selects provider based on config or env.
+ExecStart=/usr/bin/lockchain-daemon
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

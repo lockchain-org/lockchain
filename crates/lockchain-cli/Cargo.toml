@@ -1,0 +1,16 @@
+[package]
+name = "lockchain-cli"
+version = "0.2.1"
+edition = "2021"
+
+[dependencies]
+lockchain-core = { path = "../lockchain-core" }
+lockchain-zfs = { path = "../lockchain-zfs" }
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+rpassword = "7"
+crossterm = "0.27"
+ratatui = { version = "0.26", default-features = false, features = ["crossterm"] }
+schemars = "0.8"
+serde_json = "1"
+log = "0.4"

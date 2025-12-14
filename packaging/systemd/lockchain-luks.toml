@@ -1,0 +1,31 @@
+# LockChain LUKS configuration template.
+#
+# NOTE: `lockchain-luks` is scaffolded but not implemented yet. This template
+# describes the intended shape for ADR-003 follow-ups.
+#
+# Copy to /etc/lockchain-luks.toml and adjust once LUKS support lands.
+
+[policy]
+# Crypttab-style mapping names (e.g. cryptroot, vault, data).
+mappings = ["cryptroot"]
+
+[luks]
+cryptsetup_path = "/usr/sbin/cryptsetup"
+crypttab_path = "/etc/crypttab"
+
+[crypto]
+timeout_secs = 10
+
+[usb]
+key_hex_path = "/run/lockchain/key.raw"
+expected_sha256 = ""
+device_label = "LOCKCHAIN"
+# device_uuid = "0000-0000"
+device_key_path = "key.raw"
+mount_timeout_secs = 10
+
+[retry]
+max_attempts = 3
+base_delay_ms = 500
+max_delay_ms = 5000
+jitter_ratio = 0.1

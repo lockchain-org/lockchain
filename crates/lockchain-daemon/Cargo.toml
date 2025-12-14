@@ -1,0 +1,11 @@
+[package]
+name = "lockchain-daemon"
+version = "0.2.1"
+edition = "2021"
+
+[dependencies]
+lockchain-core = { path = "../lockchain-core" }
+lockchain-zfs = { path = "../lockchain-zfs" }
+log = "0.4"
+tokio = { version = "1", features = ["rt-multi-thread","macros","signal","time","net","sync","io-util"] }
+anyhow = "1"

@@ -1,0 +1,15 @@
+[package]
+name = "lockchain-ui"
+version = "0.2.1"
+edition = "2021"
+
+[dependencies]
+iced = { version = "0.13", features = ["advanced","tokio","svg","canvas"] }
+iced_aw = { version = "0.12", default-features = false, features = ["spinner"] }
+lockchain-core = { path = "../lockchain-core" }
+lockchain-zfs = { path = "../lockchain-zfs" }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+log = "0.4"
+tokio = { version = "1", features = ["time"] }
+regex = "1"
+qrcodegen = "1.8"
