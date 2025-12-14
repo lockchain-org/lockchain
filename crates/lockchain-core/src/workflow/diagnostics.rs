@@ -10,8 +10,8 @@ use crate::workflow::privilege::run_external;
 use crate::workflow::provisioning::{repair_boot_assets, set_keylocation_property};
 use sha2::{Digest, Sha256};
 use std::env;
-use std::fs;
 use std::ffi::OsString;
+use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -237,9 +237,7 @@ where
                 key_path.display()
             ),
         };
-        outcome
-            .events
-            .push(event(WorkflowLevel::Error, message));
+        outcome.events.push(event(WorkflowLevel::Error, message));
     }
 
     if metadata.is_some() {
@@ -811,7 +809,9 @@ fn hydrate_from_usb(
             }
         };
         if !mount_output.status.success() {
-            let detail = String::from_utf8_lossy(&mount_output.stderr).trim().to_string();
+            let detail = String::from_utf8_lossy(&mount_output.stderr)
+                .trim()
+                .to_string();
             events.push(event(
                 WorkflowLevel::Warn,
                 format!(

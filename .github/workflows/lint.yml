@@ -1,4 +1,4 @@
-name: Lint (Ubuntu 25.10, Rust)
+name: Lint (Ubuntu 24.04, Rust)
 
 on:
   push:
@@ -21,7 +21,12 @@ jobs:
           sudo apt-get update
           DEBIAN_FRONTEND=noninteractive sudo apt-get install -y --no-install-recommends \
             ca-certificates curl git build-essential pkg-config libssl-dev \
-            clang llvm libclang-dev libudev-dev
+            clang llvm libclang-dev libudev-dev \
+            libdrm-dev \
+            libwayland-dev wayland-protocols \
+            libx11-dev libxkbcommon-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxcursor-dev libxi-dev libxinerama-dev libxrandr-dev
           sudo update-ca-certificates
 
       - name: Checkout
@@ -52,8 +57,6 @@ jobs:
           rustup show
 
       - name: Fmt (rustfmt)
-        # Allow fmt to report issues without failing the workflow.
-        continue-on-error: true
         run: cargo fmt --all -- --check
 
       - name: Clippy (deny warnings)

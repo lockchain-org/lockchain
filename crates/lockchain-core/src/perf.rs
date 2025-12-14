@@ -229,8 +229,8 @@ fn timestamp_ms() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::OsString;
     use std::env;
+    use std::ffi::OsString;
     use std::sync::Mutex;
     use tempfile::TempDir;
 

@@ -1513,20 +1513,24 @@ fn audit_initramfs(
             }
             let manifest = String::from_utf8_lossy(&output.stdout);
             let missing: Vec<&str> = match flavor {
-                InitramfsFlavor::Dracut => {
-                    ["lockchain-load-key.sh", "lockchain-load-key.service", "zfs-load-key.service.d/lockchain.conf", "run-lockchain.mount"]
-                        .iter()
-                        .copied()
-                        .filter(|needle| !manifest.contains(needle))
-                        .collect()
-                }
-                InitramfsFlavor::InitramfsTools => {
-                    ["initramfs-tools/hooks/zz-lockchain", "initramfs-tools/scripts/local-top/lockchain"]
-                        .iter()
-                        .copied()
-                        .filter(|needle| !manifest.contains(needle))
-                        .collect()
-                }
+                InitramfsFlavor::Dracut => [
+                    "lockchain-load-key.sh",
+                    "lockchain-load-key.service",
+                    "zfs-load-key.service.d/lockchain.conf",
+                    "run-lockchain.mount",
+                ]
+                .iter()
+                .copied()
+                .filter(|needle| !manifest.contains(needle))
+                .collect(),
+                InitramfsFlavor::InitramfsTools => [
+                    "initramfs-tools/hooks/zz-lockchain",
+                    "initramfs-tools/scripts/local-top/lockchain",
+                ]
+                .iter()
+                .copied()
+                .filter(|needle| !manifest.contains(needle))
+                .collect(),
             };
             if missing.is_empty() {
                 events.push(event(
