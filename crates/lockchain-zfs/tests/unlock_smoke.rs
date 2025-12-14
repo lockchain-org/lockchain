@@ -1,6 +1,5 @@
 use lockchain_core::config::{
-    ConfigFormat, CryptoCfg, Fallback, LockchainConfig, LuksCfg, Policy, ProviderCfg, RetryCfg,
-    Usb,
+    ConfigFormat, CryptoCfg, Fallback, LockchainConfig, LuksCfg, Policy, ProviderCfg, RetryCfg, Usb,
 };
 use lockchain_core::service::{LockchainService, UnlockOptions};
 use lockchain_core::LockchainResult;

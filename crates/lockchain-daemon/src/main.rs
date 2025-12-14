@@ -6,8 +6,7 @@ use lockchain_core::{
     logging,
     provider::{KeyProvider, KeyStatusSnapshot, LuksKeyProvider, ProviderKind},
     service::{LockchainService, UnlockOptions},
-    workflow,
-    LockchainError,
+    workflow, LockchainError,
 };
 use lockchain_luks::SystemLuksProvider;
 use lockchain_zfs::SystemZfsProvider;
@@ -54,14 +53,21 @@ impl KeyProvider for RuntimeProvider {
         }
     }
 
-    fn load_key_tree(&self, root: &str, key: &[u8]) -> std::result::Result<Vec<String>, Self::Error> {
+    fn load_key_tree(
+        &self,
+        root: &str,
+        key: &[u8],
+    ) -> std::result::Result<Vec<String>, Self::Error> {
         match self {
             RuntimeProvider::Zfs(provider) => provider.load_key_tree(root, key),
             RuntimeProvider::Luks(provider) => provider.load_key_tree(root, key),
         }
     }
 
-    fn describe_targets(&self, targets: &[String]) -> std::result::Result<KeyStatusSnapshot, Self::Error> {
+    fn describe_targets(
+        &self,
+        targets: &[String],
+    ) -> std::result::Result<KeyStatusSnapshot, Self::Error> {
         match self {
             RuntimeProvider::Zfs(provider) => provider.describe_targets(targets),
             RuntimeProvider::Luks(provider) => provider.describe_targets(targets),
@@ -164,9 +170,9 @@ async fn run() -> Result<()> {
         .context("resolve provider kind")?;
 
     let provider = match provider_kind {
-        ProviderKind::Zfs => {
-            RuntimeProvider::Zfs(SystemZfsProvider::from_config(&config).context("initialise zfs provider")?)
-        }
+        ProviderKind::Zfs => RuntimeProvider::Zfs(
+            SystemZfsProvider::from_config(&config).context("initialise zfs provider")?,
+        ),
         ProviderKind::Luks => RuntimeProvider::Luks(LuksKeyProvider::new(
             SystemLuksProvider::from_config(&config).context("initialise luks provider")?,
         )),

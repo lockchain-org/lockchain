@@ -670,8 +670,7 @@ impl LockchainConfig {
             ProviderKind::Zfs => {
                 if cfg.policy.datasets.is_empty() {
                     return Err(LockchainError::InvalidConfig(
-                        "policy.datasets must list at least one dataset (provider=zfs)"
-                            .to_string(),
+                        "policy.datasets must list at least one dataset (provider=zfs)".to_string(),
                     ));
                 }
             }
@@ -707,7 +706,10 @@ impl LockchainConfig {
 
     /// Returns true when `mapping` is listed under `policy.mappings`.
     pub fn contains_mapping(&self, mapping: &str) -> bool {
-        self.policy.mappings.iter().any(|configured| configured == mapping)
+        self.policy
+            .mappings
+            .iter()
+            .any(|configured| configured == mapping)
     }
 
     /// Returns true when `target` is managed by the selected provider kind.
@@ -783,11 +785,7 @@ impl LockchainConfig {
     }
 
     fn zfs_toolchain_available(&self) -> bool {
-        let zfs = resolve_binary(
-            self.policy.zfs_path.as_deref(),
-            KNOWN_ZFS_PATHS,
-            "zfs",
-        );
+        let zfs = resolve_binary(self.policy.zfs_path.as_deref(), KNOWN_ZFS_PATHS, "zfs");
         let zpool = resolve_binary(
             self.policy.zpool_path.as_deref(),
             KNOWN_ZPOOL_PATHS,
@@ -811,13 +809,21 @@ impl LockchainConfig {
 
         match self.provider.kind {
             ProviderKind::Zfs if self.policy.datasets.is_empty() => {
-                issues.push("policy.datasets must contain at least one dataset (provider=zfs)".into());
+                issues.push(
+                    "policy.datasets must contain at least one dataset (provider=zfs)".into(),
+                );
             }
             ProviderKind::Luks if self.policy.mappings.is_empty() => {
-                issues.push("policy.mappings must contain at least one mapping (provider=luks)".into());
+                issues.push(
+                    "policy.mappings must contain at least one mapping (provider=luks)".into(),
+                );
             }
-            ProviderKind::Auto if self.policy.datasets.is_empty() && self.policy.mappings.is_empty() => {
-                issues.push("policy must specify at least one dataset or mapping (provider=auto)".into());
+            ProviderKind::Auto
+                if self.policy.datasets.is_empty() && self.policy.mappings.is_empty() =>
+            {
+                issues.push(
+                    "policy must specify at least one dataset or mapping (provider=auto)".into(),
+                );
             }
             _ => {}
         }

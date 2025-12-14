@@ -772,8 +772,7 @@ fn run() -> Result<()> {
                     }
                 }
                 ProviderKind::Luks => {
-                    let provider =
-                        LuksKeyProvider::new(SystemLuksProvider::from_config(&config)?);
+                    let provider = LuksKeyProvider::new(SystemLuksProvider::from_config(&config)?);
                     let service = LockchainService::new(config.clone(), provider);
                     let report = service.unlock_with_retry(&target, options)?;
                     if report.already_unlocked {
@@ -782,7 +781,9 @@ fn run() -> Result<()> {
                         println!("Unlocked mapping {}.", target);
                     }
                 }
-                ProviderKind::Auto => unreachable!("resolve_provider_kind must return a concrete kind"),
+                ProviderKind::Auto => {
+                    unreachable!("resolve_provider_kind must return a concrete kind")
+                }
             }
         }
         Commands::ProfileUnlock {
@@ -807,12 +808,13 @@ fn run() -> Result<()> {
                     service.unlock_with_retry(&target, options)
                 }
                 ProviderKind::Luks => {
-                    let provider =
-                        LuksKeyProvider::new(SystemLuksProvider::from_config(&config)?);
+                    let provider = LuksKeyProvider::new(SystemLuksProvider::from_config(&config)?);
                     let service = LockchainService::new(config.clone(), provider);
                     service.unlock_with_retry(&target, options)
                 }
-                ProviderKind::Auto => unreachable!("resolve_provider_kind must return a concrete kind"),
+                ProviderKind::Auto => {
+                    unreachable!("resolve_provider_kind must return a concrete kind")
+                }
             };
             let elapsed = started.elapsed();
             let success = result.is_ok();
@@ -851,7 +853,9 @@ fn run() -> Result<()> {
                                 println!("Unlocked mapping {}.", target);
                             }
                         }
-                        ProviderKind::Auto => unreachable!("resolve_provider_kind must return a concrete kind"),
+                        ProviderKind::Auto => {
+                            unreachable!("resolve_provider_kind must return a concrete kind")
+                        }
                     }
                     println!(
                         "Unlock profiled in {} ms (baseline {} ms, delta {:+} ms).",
@@ -912,8 +916,7 @@ fn run() -> Result<()> {
                     }
                 }
                 ProviderKind::Luks => {
-                    let provider =
-                        LuksKeyProvider::new(SystemLuksProvider::from_config(&config)?);
+                    let provider = LuksKeyProvider::new(SystemLuksProvider::from_config(&config)?);
                     let service = LockchainService::new(config.clone(), provider);
                     for target in targets {
                         let status = service.status(&target)?;
@@ -924,7 +927,9 @@ fn run() -> Result<()> {
                         }
                     }
                 }
-                ProviderKind::Auto => unreachable!("resolve_provider_kind must return a concrete kind"),
+                ProviderKind::Auto => {
+                    unreachable!("resolve_provider_kind must return a concrete kind")
+                }
             }
         }
         Commands::ListKeys => {
@@ -937,12 +942,13 @@ fn run() -> Result<()> {
                     service.list_keys()?
                 }
                 ProviderKind::Luks => {
-                    let provider =
-                        LuksKeyProvider::new(SystemLuksProvider::from_config(&config)?);
+                    let provider = LuksKeyProvider::new(SystemLuksProvider::from_config(&config)?);
                     let service = LockchainService::new(config.clone(), provider);
                     service.list_keys()?
                 }
-                ProviderKind::Auto => unreachable!("resolve_provider_kind must return a concrete kind"),
+                ProviderKind::Auto => {
+                    unreachable!("resolve_provider_kind must return a concrete kind")
+                }
             };
             print_key_table(provider_kind, snapshot);
         }

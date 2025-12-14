@@ -101,10 +101,7 @@ impl<P: KeyProvider<Error = LockchainError>> LockchainService<P> {
         dataset: &str,
         options: UnlockOptions,
     ) -> LockchainResult<UnlockReport> {
-        if !self
-            .config
-            .contains_target(self.provider.kind(), dataset)
-        {
+        if !self.config.contains_target(self.provider.kind(), dataset) {
             return Err(LockchainError::DatasetNotConfigured(dataset.to_string()));
         }
 
@@ -140,10 +137,7 @@ impl<P: KeyProvider<Error = LockchainError>> LockchainService<P> {
 
     /// Summarise the current keystatus for `dataset` and its encryption root.
     pub fn status(&self, dataset: &str) -> LockchainResult<DatasetStatus> {
-        if !self
-            .config
-            .contains_target(self.provider.kind(), dataset)
-        {
+        if !self.config.contains_target(self.provider.kind(), dataset) {
             return Err(LockchainError::DatasetNotConfigured(dataset.to_string()));
         }
 

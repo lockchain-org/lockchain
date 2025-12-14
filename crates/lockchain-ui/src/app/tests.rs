@@ -1,7 +1,6 @@
 use super::*;
 use lockchain_core::config::{
-    ConfigFormat, CryptoCfg, Fallback, LockchainConfig, LuksCfg, Policy, ProviderCfg, RetryCfg,
-    Usb,
+    ConfigFormat, CryptoCfg, Fallback, LockchainConfig, LuksCfg, Policy, ProviderCfg, RetryCfg, Usb,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
