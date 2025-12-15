@@ -78,8 +78,8 @@ LockChain uses a unified config file with provider selection:
 
 Legacy config files are still supported for now (and will be auto-discovered when `/etc/lockchain.toml` is missing):
 
-- ZFS: `/etc/lockchain-zfs.toml` (template: `packaging/systemd/lockchain-zfs.toml`)
-- LUKS: `/etc/lockchain-luks.toml` (template: `packaging/systemd/lockchain-luks.toml`)
+- ZFS: `/etc/lockchain-zfs.toml` (template: `packaging/providers/zfs/config/lockchain-zfs.toml`)
+- LUKS: `/etc/lockchain-luks.toml` (template: `packaging/providers/luks/config/lockchain-luks.toml`)
 
 Example configs:
 

@@ -29,4 +29,3 @@ impl CryptsetupCommand {
         Err(LockchainError::Provider("not implemented".into()))
     }
 }
-

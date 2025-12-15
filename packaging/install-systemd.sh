@@ -8,6 +8,8 @@ fi
 
 SYSTEMD_DIR=${SYSTEMD_DIR:-/etc/systemd/system}
 ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd)
+PACKAGING_DIR="$ROOT_DIR/packaging"
+SYSTEMD_SOURCE="$PACKAGING_DIR/systemd"
 
 if ! getent group lockchain >/dev/null; then
   groupadd --system lockchain
@@ -18,16 +20,16 @@ if ! id -u lockchain >/dev/null 2>&1; then
 fi
 install -d -o lockchain -g lockchain /var/lib/lockchain
 
-install -Dm644 "$ROOT_DIR/systemd/run-lockchain.mount" "$SYSTEMD_DIR/run-lockchain.mount"
-install -Dm644 "$ROOT_DIR/systemd/lockchain.service" "$SYSTEMD_DIR/lockchain.service"
-install -Dm644 "$ROOT_DIR/systemd/lockchain@.service" "$SYSTEMD_DIR/lockchain@.service"
-install -Dm644 "$ROOT_DIR/systemd/lockchain-key-usb.service" "$SYSTEMD_DIR/lockchain-key-usb.service"
+install -Dm644 "$SYSTEMD_SOURCE/run-lockchain.mount" "$SYSTEMD_DIR/run-lockchain.mount"
+install -Dm644 "$SYSTEMD_SOURCE/lockchain.service" "$SYSTEMD_DIR/lockchain.service"
+install -Dm644 "$SYSTEMD_SOURCE/lockchain@.service" "$SYSTEMD_DIR/lockchain@.service"
+install -Dm644 "$SYSTEMD_SOURCE/lockchain-key-usb.service" "$SYSTEMD_DIR/lockchain-key-usb.service"
 
 # Legacy unit names (installed for compatibility; prefer lockchain.service).
-install -Dm644 "$ROOT_DIR/systemd/lockchain-zfs.service" "$SYSTEMD_DIR/lockchain-zfs.service"
-install -Dm644 "$ROOT_DIR/systemd/lockchain-zfs@.service" "$SYSTEMD_DIR/lockchain-zfs@.service"
-install -Dm644 "$ROOT_DIR/systemd/lockchain-luks.service" "$SYSTEMD_DIR/lockchain-luks.service"
-install -Dm644 "$ROOT_DIR/systemd/lockchain-luks@.service" "$SYSTEMD_DIR/lockchain-luks@.service"
+install -Dm644 "$PACKAGING_DIR/providers/zfs/systemd/lockchain-zfs.service" "$SYSTEMD_DIR/lockchain-zfs.service"
+install -Dm644 "$PACKAGING_DIR/providers/zfs/systemd/lockchain-zfs@.service" "$SYSTEMD_DIR/lockchain-zfs@.service"
+install -Dm644 "$PACKAGING_DIR/providers/luks/systemd/lockchain-luks.service" "$SYSTEMD_DIR/lockchain-luks.service"
+install -Dm644 "$PACKAGING_DIR/providers/luks/systemd/lockchain-luks@.service" "$SYSTEMD_DIR/lockchain-luks@.service"
 
 systemctl daemon-reload
 systemctl enable run-lockchain.mount

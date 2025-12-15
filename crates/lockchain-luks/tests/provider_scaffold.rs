@@ -16,7 +16,9 @@ fn system_provider_status_returns_not_implemented() {
     let config = sample_luks_config("vault");
     let provider = SystemLuksProvider::from_config(&config).expect("provider should construct");
 
-    let err = provider.status("vault").expect_err("expected not implemented error");
+    let err = provider
+        .status("vault")
+        .expect_err("expected not implemented error");
     match err {
         LockchainError::Provider(message) => assert_eq!(message, "not implemented"),
         other => panic!("unexpected error variant: {other:?}"),
@@ -120,4 +122,3 @@ fn sample_luks_config(target: &str) -> LockchainConfig {
         format: ConfigFormat::Toml,
     }
 }
-
