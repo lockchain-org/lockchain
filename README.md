@@ -17,6 +17,7 @@ LockChain improves interaction with encrypted file systems without trivialising 
 
 - **Objective**: Deliver a unified unlock workflow for encrypted storage across providers (ZFS & LUKS).  
 - **Surfaces**: CLI, daemon, UI, and USB watcher all routing through the same workflow engine.  
+- **Docs**: Provider plumbing + shell boundary in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); contracts + capability matrix in [`docs/PROVIDERS.md`](docs/PROVIDERS.md).  
 
 ### Why LockChain?
 - **Early-boot interactions** — Dracut and initramfs-tools loaders ship with checksum + UUID enforcement for USB.
