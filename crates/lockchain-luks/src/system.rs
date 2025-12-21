@@ -381,21 +381,18 @@ impl LuksProvider for SystemLuksProvider {
 
         self.cryptsetup
             .enroll_keyfile(&source_device, existing_passphrase, keyfile)
-            .map_err(|err| {
+            .inspect_err(|err| {
                 self.set_last_error(err.to_string());
-                err
             })?;
 
         let verify_name = unique_verify_name(mapping_name);
         self.cryptsetup
             .unlock_mapping_with_keyfile(&source_device, &verify_name, keyfile)
-            .map_err(|err| {
+            .inspect_err(|err| {
                 self.set_last_error(err.to_string());
-                err
             })?;
-        self.cryptsetup.close_mapping(&verify_name).map_err(|err| {
+        self.cryptsetup.close_mapping(&verify_name).inspect_err(|err| {
             self.set_last_error(err.to_string());
-            err
         })?;
 
         self.clear_last_error();

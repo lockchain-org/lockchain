@@ -777,7 +777,7 @@ fn run() -> Result<()> {
                 }
                 ProviderKind::Luks => workflow::self_test_luks(
                     &config,
-                    |cfg| SystemLuksProvider::from_config(cfg),
+                    SystemLuksProvider::from_config,
                     &target,
                     strict_usb,
                 )
@@ -1351,7 +1351,7 @@ fn print_staging_report(provider: ProviderKind, config: &LockchainConfig) {
 /// Render LUKS mapping status along with staged `/run/cryptsetup-keys.d` key files.
 fn print_luks_table(config: &LockchainConfig, mappings: Vec<LuksMappingDescriptor>) {
     let expected = expected_checksum(config);
-    println!("{:<24} {:<12} {}", "MAPPING", "STATUS", "SOURCE");
+    println!("{:<24} {:<12} SOURCE", "MAPPING", "STATUS");
     for mapping in mappings {
         let (status, status_detail) = match mapping.state {
             LuksState::Active => ("active".to_string(), None),

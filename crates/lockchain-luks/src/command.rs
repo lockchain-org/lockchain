@@ -79,16 +79,8 @@ impl CryptsetupCommand {
         }
 
         let key_arg = keyfile.to_string_lossy().into_owned();
-        let args = vec![
-            "luksAddKey".to_string(),
-            "--batch-mode".to_string(),
-            "--key-file".to_string(),
-            "-".to_string(),
-            source.to_string(),
-            key_arg,
-        ];
-        let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        let out = self.run(&arg_refs, Some(existing_passphrase))?;
+        let args = ["luksAddKey", "--batch-mode", "--key-file", "-", source, key_arg.as_str()];
+        let out = self.run(&args, Some(existing_passphrase))?;
         if out.status == 0 {
             return Ok(());
         }

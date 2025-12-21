@@ -420,6 +420,10 @@ fn resolve_binary_path(
         )));
     }
 
+    if let Some(path) = find_in_path(name) {
+        return Ok(path);
+    }
+
     for candidate in defaults {
         let path = Path::new(candidate);
         if path.exists() {
@@ -427,12 +431,10 @@ fn resolve_binary_path(
         }
     }
 
-    find_in_path(name).ok_or_else(|| {
-        LockchainError::InvalidConfig(format!(
-            "unable to locate {name} binary; tried {:?} and PATH",
-            defaults
-        ))
-    })
+    Err(LockchainError::InvalidConfig(format!(
+        "unable to locate {name} binary; tried PATH and {:?}",
+        defaults
+    )))
 }
 
 fn find_in_path(binary: &str) -> Option<PathBuf> {
@@ -698,7 +700,6 @@ impl LuksSimulationContext {
         let passphrase = thread_rng()
             .sample_iter(&Alphanumeric)
             .take(32)
-            .map(|ch| ch as u8)
             .collect::<Vec<u8>>();
 
         Ok(Self {

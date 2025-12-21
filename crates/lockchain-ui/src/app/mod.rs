@@ -2233,7 +2233,7 @@ async fn run_directive(
                 }
                 ProviderKind::Luks => workflow::self_test_luks(
                     &config,
-                    |cfg| SystemLuksProvider::from_config(cfg),
+                    SystemLuksProvider::from_config,
                     &dataset,
                     strict_usb,
                 )

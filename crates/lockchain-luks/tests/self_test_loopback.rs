@@ -242,7 +242,7 @@ esac
 
     let report = lockchain_core::workflow::self_test_luks(
         &config,
-        |cfg| SystemLuksProvider::from_config(cfg),
+        SystemLuksProvider::from_config,
         "vault",
         true,
     )?;

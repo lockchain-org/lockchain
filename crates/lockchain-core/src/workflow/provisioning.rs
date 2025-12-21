@@ -323,16 +323,19 @@ pub fn forge_key<P: ZfsProvider<Error = LockchainError> + Clone>(
     ));
 
     match flavor {
-        InitramfsFlavor::Dracut => install_dracut_module(
-            &mountpoint.to_string_lossy(),
-            &dest_key_path,
-            filename.as_str(),
-            Some(&digest),
-            device_uuid.as_deref(),
-            &datasets,
-            &[],
-            &mut events,
-        )?,
+        InitramfsFlavor::Dracut => {
+            let mountpoint_str = mountpoint.to_string_lossy();
+            let request = DracutInstallRequest {
+                mountpoint: mountpoint_str.as_ref(),
+                dest_path: &dest_key_path,
+                key_filename: filename.as_str(),
+                checksum: Some(&digest),
+                token_uuid: device_uuid.as_deref(),
+                datasets: &datasets,
+                mappings: &[],
+            };
+            install_dracut_module(request, &mut events)?;
+        }
         InitramfsFlavor::InitramfsTools => install_initramfs_tools_hooks(
             dest_key_path.parent().unwrap_or(&mountpoint),
             &dest_key_path,
@@ -559,16 +562,19 @@ pub fn forge_luks_key<P: LuksProvider<Error = LockchainError> + Clone>(
     ));
 
     match flavor {
-        InitramfsFlavor::Dracut => install_dracut_module(
-            &mountpoint.to_string_lossy(),
-            &key_path,
-            filename.as_str(),
-            Some(&digest),
-            device_uuid.as_deref(),
-            &[],
-            &mappings,
-            &mut events,
-        )?,
+        InitramfsFlavor::Dracut => {
+            let mountpoint_str = mountpoint.to_string_lossy();
+            let request = DracutInstallRequest {
+                mountpoint: mountpoint_str.as_ref(),
+                dest_path: &key_path,
+                key_filename: filename.as_str(),
+                checksum: Some(&digest),
+                token_uuid: device_uuid.as_deref(),
+                datasets: &[],
+                mappings: &mappings,
+            };
+            install_dracut_module(request, &mut events)?;
+        }
         InitramfsFlavor::InitramfsTools => install_initramfs_tools_hooks(
             &mountpoint,
             &key_path,
@@ -1569,26 +1575,37 @@ impl Drop for MountGuard {
     }
 }
 
+/// Inputs required to render and install a dracut module.
+pub(crate) struct DracutInstallRequest<'a> {
+    mountpoint: &'a str,
+    dest_path: &'a Path,
+    key_filename: &'a str,
+    checksum: Option<&'a str>,
+    token_uuid: Option<&'a str>,
+    datasets: &'a [String],
+    mappings: &'a [String],
+}
+
+impl DracutInstallRequest<'_> {
+    fn to_context(&self) -> DracutContext {
+        DracutContext {
+            mountpoint: self.mountpoint.to_string(),
+            dest_path: self.dest_path.to_string_lossy().into_owned(),
+            key_filename: self.key_filename.to_string(),
+            checksum: self.checksum.map(|s| s.to_string()),
+            token_uuid: self.token_uuid.map(|s| s.to_string()),
+            datasets: self.datasets.to_vec(),
+            mappings: self.mappings.to_vec(),
+        }
+    }
+}
+
 /// Stage the dracut hook and systemd drop-ins that load the key during boot.
 pub(crate) fn install_dracut_module(
-    mountpoint: &str,
-    dest_path: &Path,
-    key_filename: &str,
-    checksum: Option<&str>,
-    token_uuid: Option<&str>,
-    datasets: &[String],
-    mappings: &[String],
+    request: DracutInstallRequest<'_>,
     events: &mut Vec<WorkflowEvent>,
 ) -> LockchainResult<()> {
-    let ctx = DracutContext {
-        mountpoint: mountpoint.to_string(),
-        dest_path: dest_path.to_string_lossy().into_owned(),
-        key_filename: key_filename.to_string(),
-        checksum: checksum.map(|s| s.to_string()),
-        token_uuid: token_uuid.map(|s| s.to_string()),
-        datasets: datasets.to_vec(),
-        mappings: mappings.to_vec(),
-    };
+    let ctx = request.to_context();
     let module = DracutModule::install(&ctx)?;
     events.push(event(
         WorkflowLevel::Info,
@@ -2101,16 +2118,18 @@ pub(crate) fn repair_boot_assets(
 
     let flavor = detect_initramfs_flavor()?;
     match flavor {
-        InitramfsFlavor::Dracut => install_dracut_module(
-            &mountpoint_str,
-            &dest_path,
-            &key_filename,
-            config.usb.expected_sha256.as_deref(),
-            config.usb.device_uuid.as_deref(),
-            &datasets,
-            &mappings,
-            events,
-        )?,
+        InitramfsFlavor::Dracut => {
+            let request = DracutInstallRequest {
+                mountpoint: &mountpoint_str,
+                dest_path: &dest_path,
+                key_filename: &key_filename,
+                checksum: config.usb.expected_sha256.as_deref(),
+                token_uuid: config.usb.device_uuid.as_deref(),
+                datasets: &datasets,
+                mappings: &mappings,
+            };
+            install_dracut_module(request, events)?;
+        }
         InitramfsFlavor::InitramfsTools => install_initramfs_tools_hooks(
             &mountpoint_path,
             &dest_path,
