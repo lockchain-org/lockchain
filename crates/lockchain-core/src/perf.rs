@@ -139,7 +139,7 @@ pub fn record_unlock_timing(
     })
 }
 
-/// Generate a human-friendly bundle containing baselines and the raw JSONL log.
+/// Generate a text bundle containing baselines and the raw JSONL log.
 pub fn bundle_logs(target_dir: Option<PathBuf>) -> io::Result<PathBuf> {
     let paths = log_paths()?;
     let export_root = target_dir

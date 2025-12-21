@@ -69,14 +69,17 @@ pub struct LuksKeyProvider<P> {
 }
 
 impl<P> LuksKeyProvider<P> {
+    /// Wrap a `LuksProvider` so shared workflows can treat it as a `KeyProvider`.
     pub fn new(inner: P) -> Self {
         Self { inner }
     }
 
+    /// Borrow the wrapped provider implementation.
     pub fn inner(&self) -> &P {
         &self.inner
     }
 
+    /// Consume the adapter and return the wrapped provider.
     pub fn into_inner(self) -> P {
         self.inner
     }

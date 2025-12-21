@@ -1,4 +1,4 @@
-//! Lightweight logging bootstrapper shared by every Lockchain binary.
+//! Logging bootstrap shared by LockChain binaries.
 
 use env_logger::Env;
 use serde_json::json;
@@ -11,7 +11,7 @@ static INIT: OnceLock<()> = OnceLock::new();
 const FORMAT_ENV: &str = "LOCKCHAIN_LOG_FORMAT";
 const LEVEL_ENV: &str = "LOCKCHAIN_LOG_LEVEL";
 
-/// Initialize a global logger for Lockchain binaries.
+/// Initialize a global logger for LockChain binaries.
 ///
 /// The first caller wins; subsequent calls are no-ops. If `RUST_LOG` is
 /// unset, the `default_level` argument is used, overridable via

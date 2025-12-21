@@ -1,4 +1,4 @@
-//! Configuration model and helpers used by Lockchain services.
+//! Configuration model and helpers shared by LockChain components.
 
 use crate::error::{LockchainError, LockchainResult};
 use directories_next::ProjectDirs;
@@ -12,9 +12,14 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use tempfile::NamedTempFile;
 
 #[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
+use std::os::unix::io::AsRawFd;
 
 pub const DEFAULT_CONFIG_PATH: &str = "/etc/lockchain.toml";
 const LEGACY_ZFS_CONFIG_PATH: &str = "/etc/lockchain-zfs.toml";
@@ -67,6 +72,80 @@ pub fn looks_like_mapping_name(name: &str) -> bool {
     trimmed
         .chars()
         .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
+}
+
+fn looks_like_uuid(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let mut hex_chars = 0usize;
+    let mut has_dash = false;
+    for ch in trimmed.chars() {
+        if ch == '-' {
+            has_dash = true;
+            continue;
+        }
+        if !ch.is_ascii_hexdigit() {
+            return false;
+        }
+        hex_chars += 1;
+    }
+
+    if hex_chars == 0 {
+        return false;
+    }
+
+    // If there are no separators, expect a canonical 32-character UUID.
+    if !has_dash && hex_chars != 32 {
+        return false;
+    }
+
+    true
+}
+
+/// Lightweight sanity check for LUKS targets configured under `policy.targets`.
+///
+/// Targets can be mapping names (e.g. `vault`) or `crypttab`-style source identifiers (e.g.
+/// `UUID=...`, `PARTUUID=...`, or `/dev/disk/by-uuid/...`).
+pub fn looks_like_luks_target(target: &str) -> bool {
+    let trimmed = target.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    if looks_like_mapping_name(trimmed) {
+        return true;
+    }
+
+    if trimmed.starts_with('/') {
+        return true;
+    }
+
+    if looks_like_uuid(trimmed) {
+        return true;
+    }
+
+    let Some((prefix, value)) = trimmed.split_once('=') else {
+        return false;
+    };
+
+    let prefix = prefix.trim();
+    let value = value.trim();
+    if prefix.is_empty() || value.is_empty() {
+        return false;
+    }
+
+    if !prefix.chars().all(|ch| ch.is_ascii_alphanumeric()) {
+        return false;
+    }
+
+    if prefix.eq_ignore_ascii_case("uuid") || prefix.eq_ignore_ascii_case("partuuid") {
+        return looks_like_uuid(value);
+    }
+
+    true
 }
 
 fn detect_ubuntu_root_datasets() -> Option<Vec<String>> {
@@ -306,7 +385,7 @@ pub fn default_systemd_hint() -> &'static str {
 /// Describes which datasets we manage and the paths to supporting tooling.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Policy {
-    /// Provider targets: datasets for ZFS, mapping names for LUKS.
+    /// Provider targets: datasets for ZFS, mapping names or crypttab identifiers for LUKS.
     #[serde(default, alias = "datasets", alias = "mappings", alias = "volumes")]
     pub targets: Vec<String>,
 
@@ -343,7 +422,7 @@ pub struct ZfsCfg {
     pub zpool_path: Option<String>,
 }
 
-/// LUKS provider configuration (ADR-003 follow-ups).
+/// LUKS provider configuration (cryptsetup/crypttab integration).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub struct LuksCfg {
     #[serde(default)]
@@ -525,7 +604,7 @@ pub struct LockchainConfig {
     #[serde(default)]
     pub crypto: CryptoCfg,
 
-    /// LUKS provider configuration (unused until `lockchain-luks` is implemented).
+    /// LUKS provider configuration.
     #[serde(default)]
     pub luks: LuksCfg,
 
@@ -567,8 +646,8 @@ impl LockchainConfig {
 
     /// Load configuration from disk, creating a bootstrap copy when missing.
     ///
-    /// If the requested path does not exist, Lockchain will attempt to
-    /// materialise a bootstrap template at that location. When the caller
+    /// If the requested path does not exist, LockChain will attempt to
+    /// materialize a bootstrap template at that location. When the caller
     /// requests the global default (`/etc/lockchain.toml`) and the
     /// process lacks permission to create it, a per-user configuration is
     /// written to the platform config directory instead.
@@ -737,7 +816,7 @@ impl LockchainConfig {
 
     /// Resolve the active provider kind to use for workflows.
     ///
-    /// When the configuration requests `auto`, Lockchain selects a provider by:
+    /// When the configuration requests `auto`, LockChain selects a provider by:
     /// - inspecting provider-specific config sections (`[zfs]`, `[luks]`)
     /// - confirming the corresponding host binaries are present (`zfs`/`zpool` or `cryptsetup`)
     pub fn resolve_provider_kind(&self) -> LockchainResult<ProviderKind> {
@@ -869,9 +948,9 @@ impl LockchainConfig {
                         }
                     }
                     Some(ProviderKind::Luks) => {
-                        if !looks_like_mapping_name(trimmed) {
+                        if !looks_like_luks_target(trimmed) {
                             issues.push(format!(
-                                "policy.targets contains invalid volume name: {trimmed}"
+                                "policy.targets contains invalid LUKS target: {trimmed}"
                             ));
                         }
                     }
@@ -881,18 +960,31 @@ impl LockchainConfig {
         }
 
         if let Some(expected) = &self.usb.expected_sha256 {
-            if expected.len() != 64 || hex::decode(expected).is_err() {
+            let trimmed = expected.trim();
+            if !trimmed.is_empty() && (trimmed.len() != 64 || hex::decode(trimmed).is_err()) {
                 issues.push("usb.expected_sha256 must be a 64-character hex string".to_string());
             }
         }
 
         if self.fallback.enabled {
-            if self.fallback.passphrase_salt.is_none() {
+            if self
+                .fallback
+                .passphrase_salt
+                .as_deref()
+                .map(|value| value.trim().is_empty())
+                .unwrap_or(true)
+            {
                 issues.push(
                     "fallback.enabled is true but fallback.passphrase_salt is missing".to_string(),
                 );
             }
-            if self.fallback.passphrase_xor.is_none() {
+            if self
+                .fallback
+                .passphrase_xor
+                .as_deref()
+                .map(|value| value.trim().is_empty())
+                .unwrap_or(true)
+            {
                 issues.push(
                     "fallback.enabled is true but fallback.passphrase_xor is missing".to_string(),
                 );
@@ -967,9 +1059,89 @@ impl LockchainConfig {
             ConfigFormat::Toml => toml::to_string_pretty(self)?,
             ConfigFormat::Yaml => serde_yaml::to_string(self)?,
         };
-        fs::write(&self.path, payload)?;
+        let dest = resolve_write_path(&self.path).map_err(LockchainError::Io)?;
+        let parent = dest
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+
+        #[cfg(unix)]
+        let metadata = dest.exists().then(|| fs::metadata(&dest)).transpose()?;
+
+        #[cfg(unix)]
+        let desired_mode = metadata
+            .as_ref()
+            .map(|meta| meta.permissions().mode())
+            .unwrap_or_else(|| {
+                if self.path.starts_with("/etc/") {
+                    0o640
+                } else {
+                    0o600
+                }
+            });
+
+        #[cfg(unix)]
+        let desired_owner = metadata.as_ref().map(|meta| (meta.uid(), meta.gid()));
+
+        let mut temp = NamedTempFile::new_in(parent)?;
+        temp.as_file_mut().write_all(payload.as_bytes())?;
+        temp.as_file_mut().flush()?;
+
+        #[cfg(unix)]
+        {
+            fs::set_permissions(temp.path(), PermissionsExt::from_mode(desired_mode))?;
+            if let Some((uid, gid)) = desired_owner {
+                let rc = unsafe { libc::fchown(temp.as_file().as_raw_fd(), uid, gid) };
+                if rc != 0 {
+                    return Err(LockchainError::Io(io::Error::last_os_error()));
+                }
+            }
+        }
+
+        let _ = temp.as_file().sync_all();
+        temp.persist(&dest)
+            .map_err(|err| LockchainError::Io(err.error))?;
+        let _ = sync_parent_dir(parent);
         Ok(())
     }
+}
+
+fn resolve_write_path(path: &Path) -> io::Result<PathBuf> {
+    let mut candidate = path.to_path_buf();
+    for _ in 0..16 {
+        let meta = match fs::symlink_metadata(&candidate) {
+            Ok(meta) => meta,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(candidate),
+            Err(err) => return Err(err),
+        };
+
+        if !meta.file_type().is_symlink() {
+            return Ok(candidate);
+        }
+
+        let target = fs::read_link(&candidate)?;
+        candidate = if target.is_absolute() {
+            target
+        } else {
+            candidate
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."))
+                .join(target)
+        };
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("symlink resolution depth exceeded for {}", path.display()),
+    ))
+}
+
+fn sync_parent_dir(dir: &Path) -> io::Result<()> {
+    fs::File::open(dir).and_then(|file| file.sync_all())
 }
 
 fn ensure_bootstrap_file(path: &Path) -> io::Result<bool> {
@@ -1107,6 +1279,22 @@ tank/secure\t/mnt/secure\n";
         assert!(!looks_like_dataset_name("-pool/dataset"));
         assert!(!looks_like_dataset_name("pool/space here"));
         assert!(!looks_like_dataset_name("pool/dataset@shadow"));
+    }
+
+    #[test]
+    fn luks_target_validator_accepts_mapping_uuid_and_paths() {
+        assert!(looks_like_luks_target("vault"));
+        assert!(looks_like_luks_target("UUID=1111-2222-3333-4444"));
+        assert!(looks_like_luks_target(
+            "uuid=11112222333344445555666677778888"
+        ));
+        assert!(looks_like_luks_target("/dev/nvme0n1p3"));
+        assert!(looks_like_luks_target("/dev/disk/by-uuid/1111-2222"));
+
+        assert!(!looks_like_luks_target(""));
+        assert!(!looks_like_luks_target("not a target"));
+        assert!(!looks_like_luks_target("UUID="));
+        assert!(!looks_like_luks_target("PARTUUID=not-a-uuid"));
     }
 
     #[test]

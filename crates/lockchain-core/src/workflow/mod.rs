@@ -25,11 +25,12 @@ pub use bootstrap::{
 pub use diagnostics::{doctor, tune};
 pub use privilege::ensure_privilege_support;
 pub use provisioning::{
-    discover_usb_candidates, forge_key, render_usb_selection_prompt, update_fallback_passphrase,
-    usb_candidate_from_selector, ForgeMode, ProvisionOptions, UsbCandidate,
+    discover_usb_candidates, forge_key, forge_luks_key, render_usb_selection_prompt,
+    update_fallback_passphrase, usb_candidate_from_selector, ForgeMode, ProvisionOptions,
+    UsbCandidate,
 };
 pub use repair::repair_environment;
-pub use self_test::self_test;
+pub use self_test::{self_test, self_test_luks};
 pub use uninstall::uninstall;
 
 /// Severity levels used when reporting workflow events.
@@ -133,13 +134,13 @@ where
 /// Recover fallback key material and write it to disk with the right permissions.
 pub fn recover_key<P>(
     config: &LockchainConfig,
-    provider: P,
+    _provider: P,
     dataset: &str,
     recovery: RecoveryInput<'_>,
     output_path: &Path,
 ) -> LockchainResult<WorkflowReport>
 where
-    P: ZfsProvider<Error = LockchainError> + Clone,
+    P: ZfsProvider<Error = LockchainError>,
 {
     let mut events = Vec::new();
     let (key, via_hex) = match recovery {
@@ -156,10 +157,7 @@ where
             (bytes, true)
         }
         RecoveryInput::Passphrase(passphrase) => {
-            let service = LockchainService::new(Arc::new(config.clone()), provider.clone());
-            let bytes = service
-                .derive_fallback_key(passphrase)
-                .map_err(|err| LockchainError::InvalidConfig(err.to_string()))?;
+            let bytes = crate::fallback::derive_fallback_key(config, passphrase)?;
             (bytes.to_vec(), false)
         }
     };

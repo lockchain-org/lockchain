@@ -1,4 +1,4 @@
-//! Tuning and diagnostic workflows that keep Lockchain deployments healthy.
+//! Tuning and diagnostic workflows that keep LockChain deployments healthy.
 
 use super::{event, repair_environment, WorkflowEvent, WorkflowLevel, WorkflowReport};
 use crate::config::LockchainConfig;
@@ -39,7 +39,7 @@ struct TuneOutcome {
     updated_config: Option<LockchainConfig>,
 }
 
-/// Run non-destructive checks and attempt to repair obvious issues automatically.
+/// Run non-destructive checks and attempt to repair common issues automatically.
 pub fn tune<P>(config: &LockchainConfig, provider: P) -> LockchainResult<WorkflowReport>
 where
     P: ZfsProvider<Error = LockchainError> + Clone,

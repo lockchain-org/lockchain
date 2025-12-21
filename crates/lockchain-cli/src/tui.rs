@@ -1,4 +1,6 @@
-//! Minimal terminal UI for unlocking datasets when you prefer arrow keys over shells.
+//! Terminal UI for interactively unlocking ZFS datasets.
+//!
+//! This interface currently supports the ZFS provider only.
 
 use anyhow::Result;
 use crossterm::{
@@ -27,7 +29,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// Fire up the TUI with shared config/service references.
+/// Launch the TUI with shared config/service references.
 pub fn launch(
     config: Arc<LockchainConfig>,
     service: LockchainService<SystemZfsProvider>,

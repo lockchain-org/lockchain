@@ -19,10 +19,12 @@ use iced::window;
 use iced::{application, Error as IcedError, Font, Size, Task, Theme};
 use lockchain_core::config::{looks_like_dataset_name, LockchainConfig, DEFAULT_CONFIG_PATH};
 use lockchain_core::perf;
+use lockchain_core::provider::ProviderKind;
 use lockchain_core::workflow::{
     self, ensure_privilege_support, ForgeMode, ProvisionOptions, RecoveryInput, WorkflowEvent,
     WorkflowLevel, WorkflowReport,
 };
+use lockchain_luks::SystemLuksProvider;
 use lockchain_zfs::SystemZfsProvider;
 use log::{info, warn};
 use regex::Regex;
@@ -83,7 +85,7 @@ pub(super) const FONT_MONO_BOLD: Font = Font {
     ..Font::MONOSPACE
 };
 
-/// Launch the Iced application with the Lockchain-specific theme and state.
+/// Launch the Iced application with the LockChain-specific theme and state.
 pub fn run() -> iced::Result {
     configure_runtime_environment();
     lockchain_core::logging::init("info");
@@ -122,7 +124,7 @@ fn run_control_deck() -> iced::Result {
         LockchainUi::update,
         LockchainUi::view,
     )
-    // Bundle Orbitron (UI) and Hack (console) for offline aesthetics.
+    // Bundle UI + console fonts so the Control Deck can run offline.
     .default_font(FONT_UI_REGULAR)
     .font(include_bytes!("../../assets/fonts/Orbitron-Regular.ttf"))
     .font(include_bytes!("../../assets/fonts/Orbitron-Bold.ttf"))
@@ -2115,7 +2117,7 @@ fn help_text(directive: Directive) -> &'static str {
     match directive {
         Directive::NewKey => "Forge a new 32-byte USB key. Type a dataset path to override defaults and use list/#/auto to choose the USB device.",
         Directive::NewKeySafe => "Safe forge collects dataset, device, and confirmations interactively. Respond to prompts with the requested value (dataset path, /dev path or auto/#, then wipe/format/commit).",
-        Directive::SelfTest => "Provision a scratch encrypted pool, unlock it with the current key, then tear it down. Provide a dataset path to override defaults and add strict=true to enforce the configured selector.",
+        Directive::SelfTest => "Provision a scratch encrypted target (ZFS pool or loopback LUKS volume), unlock it with the current key, then tear it down. Provide a target override and add strict=true to enforce the configured selector.",
         Directive::RecoverKey => "Recreate USB key material by pasting the recovery key or typing the configured passphrase. Optional output=/path overrides /var/lib/lockchain/<dataset>.key.",
         Directive::Tune => "Run the end-to-end tuning suite to refresh LockChain integration.",
         Directive::Settings => "Update defaults: dataset=<pool/dataset>, label=<USB_LABEL>, uuid=<DEVICE_UUID>, reset_usb=true.",
@@ -2157,12 +2159,19 @@ async fn run_directive(
     raw_input: String,
 ) -> Result<WorkflowReport, String> {
     let mut config = load_ui_config(&config_path)?;
-    let provider = SystemZfsProvider::from_config(&config).map_err(|err| err.to_string())?;
+    let provider_kind = config
+        .resolve_provider_kind()
+        .map_err(|err| err.to_string())?;
 
     let (kv, free) = parse_kv(&raw_input);
 
     match directive {
         Directive::NewKey | Directive::NewKeySafe => {
+            if !matches!(provider_kind, ProviderKind::Zfs) {
+                return Err("New Key forging is only available for provider=zfs in Control Deck today. Use lockchain-cli init for LUKS provisioning.".into());
+            }
+            let provider =
+                SystemZfsProvider::from_config(&config).map_err(|err| err.to_string())?;
             let dataset = resolve_dataset(&config, &kv, &free)?;
             let mode = if matches!(directive, Directive::NewKeySafe) {
                 ForgeMode::Safe
@@ -2215,9 +2224,34 @@ async fn run_directive(
                 .or_else(|| kv.get("strict"))
                 .map(|v| parse_bool(v))
                 .unwrap_or(false);
-            workflow::self_test(&config, provider, &dataset, strict_usb).map_err(|e| e.to_string())
+            match provider_kind {
+                ProviderKind::Zfs => {
+                    let provider =
+                        SystemZfsProvider::from_config(&config).map_err(|err| err.to_string())?;
+                    workflow::self_test(&config, provider, &dataset, strict_usb)
+                        .map_err(|e| e.to_string())
+                }
+                ProviderKind::Luks => workflow::self_test_luks(
+                    &config,
+                    |cfg| SystemLuksProvider::from_config(cfg),
+                    &dataset,
+                    strict_usb,
+                )
+                .map_err(|e| e.to_string()),
+                ProviderKind::Auto => Err(
+                    "provider.type=auto must resolve to zfs or luks before running self-test"
+                        .into(),
+                ),
+            }
         }
         Directive::RecoverKey => {
+            if !matches!(provider_kind, ProviderKind::Zfs) {
+                return Err(
+                    "Restore Key is only available for provider=zfs in Control Deck today.".into(),
+                );
+            }
+            let provider =
+                SystemZfsProvider::from_config(&config).map_err(|err| err.to_string())?;
             let dataset = resolve_dataset(&config, &kv, &free)?;
             let output = kv
                 .get("output")
@@ -2300,6 +2334,14 @@ async fn run_directive(
             }
         }
         Directive::Tune => {
+            if !matches!(provider_kind, ProviderKind::Zfs) {
+                return Err(
+                    "Tuning Tasks are only available for provider=zfs in Control Deck today."
+                        .into(),
+                );
+            }
+            let provider =
+                SystemZfsProvider::from_config(&config).map_err(|err| err.to_string())?;
             let mut report =
                 workflow::tune(&config, provider.clone()).map_err(|e| e.to_string())?;
             report.title = "Tuning sequence".into();

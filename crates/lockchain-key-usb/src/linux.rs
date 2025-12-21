@@ -5,15 +5,16 @@ use anyhow::{bail, Context, Result};
 use clap::Parser;
 use hex::encode as hex_encode;
 use lockchain_core::{
-    config::{LockchainConfig, DEFAULT_CONFIG_PATH},
+    config::{looks_like_mapping_name, LockchainConfig, DEFAULT_CONFIG_PATH},
     keyfile::{read_key_file, write_raw_key_file},
-    logging,
+    logging, ProviderKind,
 };
 use log::{debug, error, info, warn};
 use sha2::{Digest, Sha256};
 use std::ffi::OsStr;
 use std::fs;
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Write};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -22,6 +23,7 @@ use std::time::{Duration, Instant};
 use udev::{Device, Enumerator, MonitorBuilder};
 
 const STAGING_ROOT: &str = "/run/lockchain/media";
+const CRYPTSETUP_KEYS_DIR: &str = "/run/cryptsetup-keys.d";
 
 /// Command-line options for the USB watcher service.
 #[derive(Parser, Debug)]
@@ -69,6 +71,9 @@ fn run() -> Result<()> {
     );
 
     let daemon = UsbKeyDaemon::new(config);
+    // Clear any stale staging data left behind after a crash/restart; scan_existing will repopulate.
+    daemon.clear_destination();
+    daemon.clear_cryptsetup_keys();
     daemon.scan_existing()?;
     daemon.event_loop()
 }
@@ -179,14 +184,14 @@ impl UsbKeyDaemon {
                 "key material not yet present at {}; waiting for provisioning",
                 source_path.display()
             );
-            // If key is absent, do not log errors or propagate; just keep watcher idle.
+            // If the key is absent, stay quiet and retry on the next scan.
             return Ok(());
         }
 
         let (key, converted) = match read_key_file(&source_path) {
             Ok(result) => result,
             Err(err) => {
-                // Ignore empty/placeholder files to avoid thrashing mounts during boot.
+                // Ignore empty staging files to avoid repeated mount churn during boot.
                 if let lockchain_core::error::LockchainError::InvalidHexKey { reason, .. } = &err {
                     if reason.contains("file is empty") {
                         debug!(
@@ -198,6 +203,7 @@ impl UsbKeyDaemon {
                 }
                 warn!("failed to decode key at {}: {err}", source_path.display());
                 self.clear_destination();
+                self.clear_cryptsetup_keys();
                 return Ok(());
             }
         };
@@ -211,7 +217,7 @@ impl UsbKeyDaemon {
             } else {
                 let checksum = hex_encode(Sha256::digest(&key));
                 if !expected.eq_ignore_ascii_case(&checksum) {
-                    // If the destination key already matches expected, preserve it and skip the bad token copy.
+                    // If the destination key already matches expected, keep it and ignore this token copy.
                     if let Ok((existing, _)) = read_key_file(&self.config.key_hex_path()) {
                         let dest_sum = hex_encode(Sha256::digest(&existing));
                         if expected.eq_ignore_ascii_case(&dest_sum) {
@@ -255,6 +261,10 @@ impl UsbKeyDaemon {
             );
         }
 
+        if let Err(err) = self.stage_cryptsetup_keys(&key) {
+            warn!("failed to stage cryptsetup key files: {err:?}");
+        }
+
         drop(mount_session);
 
         let mut guard = self.active.lock().unwrap();
@@ -290,6 +300,7 @@ impl UsbKeyDaemon {
                 device_syspath(device)
             );
             self.clear_destination();
+            self.clear_cryptsetup_keys();
             *guard = None;
         }
     }
@@ -309,6 +320,96 @@ impl UsbKeyDaemon {
             Ok(_) => info!("removed destination key {}", dest.display()),
             Err(err) if err.kind() == ErrorKind::NotFound => {}
             Err(err) => warn!("failed to remove destination key {}: {err}", dest.display()),
+        }
+    }
+
+    fn stage_cryptsetup_keys(&self, key: &[u8]) -> Result<()> {
+        let provider = self
+            .config
+            .resolve_provider_kind()
+            .unwrap_or(self.config.provider.r#type);
+        if provider != ProviderKind::Luks {
+            return Ok(());
+        }
+
+        if key.len() != 32 {
+            bail!("key material must be 32 bytes (got {})", key.len());
+        }
+
+        let mappings: Vec<&str> = self
+            .config
+            .policy
+            .targets
+            .iter()
+            .map(|entry| entry.trim())
+            .filter(|entry| looks_like_mapping_name(entry))
+            .collect();
+
+        if mappings.is_empty() {
+            debug!("no crypt mappings configured; skipping /run/cryptsetup-keys.d staging");
+            return Ok(());
+        }
+
+        let dir = Path::new(CRYPTSETUP_KEYS_DIR);
+        fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+        let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o700));
+
+        let pid = std::process::id();
+        for mapping in mappings {
+            let tmp = dir.join(format!(".{mapping}.key.{pid}.new"));
+            let dest = dir.join(format!("{mapping}.key"));
+
+            let mut handle = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp)
+                .with_context(|| format!("open {}", tmp.display()))?;
+            handle
+                .write_all(key)
+                .with_context(|| format!("write {}", tmp.display()))?;
+            let _ = handle.sync_all();
+
+            let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(0o400));
+            fs::rename(&tmp, &dest)
+                .with_context(|| format!("rename {} -> {}", tmp.display(), dest.display()))?;
+            let _ = fs::set_permissions(&dest, fs::Permissions::from_mode(0o400));
+        }
+
+        Ok(())
+    }
+
+    fn clear_cryptsetup_keys(&self) {
+        let provider = self
+            .config
+            .resolve_provider_kind()
+            .unwrap_or(self.config.provider.r#type);
+        if provider != ProviderKind::Luks {
+            return;
+        }
+
+        let mappings: Vec<&str> = self
+            .config
+            .policy
+            .targets
+            .iter()
+            .map(|entry| entry.trim())
+            .filter(|entry| looks_like_mapping_name(entry))
+            .collect();
+
+        if mappings.is_empty() {
+            return;
+        }
+
+        let dir = Path::new(CRYPTSETUP_KEYS_DIR);
+        for mapping in mappings {
+            let dest = dir.join(format!("{mapping}.key"));
+            match fs::remove_file(&dest) {
+                Ok(_) => debug!("removed staged cryptsetup key {}", dest.display()),
+                Err(err) if err.kind() == ErrorKind::NotFound => {}
+                Err(err) => warn!("failed to remove staged key {}: {err}", dest.display()),
+            }
         }
     }
 

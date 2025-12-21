@@ -4,9 +4,7 @@ use crate::config::LockchainConfig;
 use crate::error::{LockchainError, LockchainResult};
 use crate::keyfile::{read_key_file, write_raw_key_file};
 use crate::provider::{KeyProvider, KeyStatusSnapshot};
-use hex::FromHex;
 use log::warn;
-use pbkdf2::pbkdf2_hmac;
 use sha2::{Digest, Sha256};
 use std::cmp::min;
 use std::path::Path;
@@ -215,6 +213,16 @@ impl<P: KeyProvider<Error = LockchainError>> LockchainService<P> {
     /// Make sure the loaded key matches the expected checksum when configured.
     fn verify_checksum(&self, key: &[u8]) -> LockchainResult<()> {
         if let Some(expected) = &self.config.usb.expected_sha256 {
+            let expected = expected.trim();
+            if expected.is_empty() {
+                warn!("usb.expected_sha256 is empty; skipping checksum verification");
+                return Ok(());
+            }
+            if expected.len() != 64 || hex::decode(expected).is_err() {
+                return Err(LockchainError::InvalidConfig(
+                    "usb.expected_sha256 must be a 64-character hex string".to_string(),
+                ));
+            }
             let digest = Sha256::digest(key);
             let actual = hex::encode(digest);
             if !expected.eq_ignore_ascii_case(&actual) {
@@ -231,39 +239,7 @@ impl<P: KeyProvider<Error = LockchainError>> LockchainService<P> {
 
     /// Derive the fallback key using the configured PBKDF2 parameters and mask.
     pub fn derive_fallback_key(&self, passphrase: &[u8]) -> LockchainResult<Zeroizing<Vec<u8>>> {
-        let fallback = &self.config.fallback;
-        let salt_hex = fallback.passphrase_salt.as_ref().ok_or_else(|| {
-            LockchainError::InvalidConfig("fallback.passphrase_salt missing".into())
-        })?;
-        let xor_hex = fallback.passphrase_xor.as_ref().ok_or_else(|| {
-            LockchainError::InvalidConfig("fallback.passphrase_xor missing".into())
-        })?;
-
-        let salt = Vec::from_hex(salt_hex).map_err(|err| {
-            LockchainError::InvalidConfig(format!("invalid fallback.passphrase_salt: {}", err))
-        })?;
-        let cipher = Vec::from_hex(xor_hex).map_err(|err| {
-            LockchainError::InvalidConfig(format!("invalid fallback.passphrase_xor: {}", err))
-        })?;
-
-        if cipher.len() != 32 {
-            return Err(LockchainError::InvalidConfig(format!(
-                "fallback.passphrase_xor length must be 32 bytes, got {}",
-                cipher.len()
-            )));
-        }
-
-        let iterations = fallback.passphrase_iters.max(1);
-        let mut derived = Zeroizing::new(vec![0u8; cipher.len()]);
-        pbkdf2_hmac::<Sha256>(passphrase, &salt, iterations, &mut derived);
-
-        let raw: Vec<u8> = cipher
-            .iter()
-            .zip(derived.iter())
-            .map(|(c, d)| c ^ d)
-            .collect();
-
-        Ok(Zeroizing::new(raw))
+        crate::fallback::derive_fallback_key(&self.config, passphrase)
     }
 }
 

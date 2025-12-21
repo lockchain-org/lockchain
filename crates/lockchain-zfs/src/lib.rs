@@ -1,6 +1,7 @@
-//! Glue layer that exposes the system-backed ZFS provider to the rest of the
-//! Lockchain stack. The heavy lifting lives in `system`, while `command` and
-//! `parse` cover shell integration details.
+//! ZFS provider integration.
+//!
+//! `system` implements `ZfsProvider` using the host `zfs`/`zpool` CLIs. `command` and
+//! `parse` isolate shell execution and output parsing so the provider stays testable.
 
 mod command;
 mod parse;

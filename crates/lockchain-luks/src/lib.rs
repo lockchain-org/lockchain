@@ -1,11 +1,11 @@
 #![forbid(unsafe_code)]
 
-//! System provider for LUKS-backed volumes.
+//! System provider for LUKS-backed mappings.
 //!
-//! This crate will own the host integration for:
+//! Integrates with the host via:
 //! - `cryptsetup` (open/close/status)
-//! - `crypttab` modelling and validation
-//! - initrd hooks (dracut + initramfs-tools) to wire root unlock
+//! - `/etc/crypttab` parsing
+//! - initrd hooks (dracut + initramfs-tools) for root unlock (ADR-003)
 
 mod command;
 mod crypttab;

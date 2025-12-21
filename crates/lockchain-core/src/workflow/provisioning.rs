@@ -1,10 +1,12 @@
 //! Provisioning workflow that wipes, seeds, and configures the USB key token.
 
 use super::{event, privilege::run_external, WorkflowEvent, WorkflowLevel, WorkflowReport};
-use crate::config::{detect_binary_path, LockchainConfig, Usb, KNOWN_ZFS_PATHS};
+use crate::config::{
+    detect_binary_path, LockchainConfig, Usb, KNOWN_CRYPTSETUP_PATHS, KNOWN_ZFS_PATHS,
+};
 use crate::error::{LockchainError, LockchainResult};
 use crate::keyfile::{read_key_file, write_raw_key_file};
-use crate::provider::{ProviderKind, ZfsProvider};
+use crate::provider::{LuksProvider, ProviderKind, ZfsProvider};
 use pbkdf2::pbkdf2_hmac;
 use rand::rngs::OsRng;
 use rand::RngCore;
@@ -36,6 +38,8 @@ const UPDATE_INITRAMFS_BINARIES: &[&str] = &["/usr/sbin/update-initramfs"];
 const LSINITRD_BINARIES: &[&str] = &["/usr/bin/lsinitrd", "/bin/lsinitrd"];
 const INITRAMFS_HOOK_PATH: &str = "/etc/initramfs-tools/hooks/zz-lockchain";
 const INITRAMFS_LOCAL_TOP_PATH: &str = "/etc/initramfs-tools/scripts/local-top/lockchain";
+const INITRAMFS_INIT_TOP_LUKS_PATH: &str =
+    "/etc/initramfs-tools/scripts/init-top/00-lockchain-cryptsetup-keys";
 const PLACEHOLDER_DEVICE_LABEL: &str = "REPLACE_WITH_USB_LABEL";
 
 /// Enumerated removable media device surfaced by discovery.
@@ -111,7 +115,10 @@ pub struct ProvisionOptions {
     pub usb_device: Option<String>,
     pub mountpoint: Option<PathBuf>,
     pub key_filename: Option<String>,
+    /// Optional fallback passphrase material to encode the generated key.
     pub passphrase: Option<String>,
+    /// Existing LUKS passphrase used to enroll the generated key into a keyslot.
+    pub luks_passphrase: Option<String>,
     pub force_wipe: bool,
     pub rebuild_initramfs: bool,
 }
@@ -123,6 +130,7 @@ impl Default for ProvisionOptions {
             mountpoint: None,
             key_filename: None,
             passphrase: None,
+            luks_passphrase: None,
             force_wipe: false,
             rebuild_initramfs: true,
         }
@@ -236,9 +244,9 @@ pub fn forge_key<P: ZfsProvider<Error = LockchainError> + Clone>(
         format!("Wrote key material to {}", key_path.display()),
     ));
 
-    // Primary key location used at boot: the actual mountpoint in use now.
+    // Key path the host will reference while the token is mounted.
     let dest_path = mountpoint.join(&filename);
-    // Keep a host-side reference that the USB watcher and tuning can read while the token is mounted.
+    // Keep a host-visible path to the token file for the USB watcher and tuning workflows.
     let host_token_path = dest_path.clone();
     write_key_with_remount(&host_token_path, &key_material, &mountpoint, &mut events)?;
     if fs::metadata(&host_token_path)?.len() != 32 {
@@ -322,6 +330,7 @@ pub fn forge_key<P: ZfsProvider<Error = LockchainError> + Clone>(
             Some(&digest),
             device_uuid.as_deref(),
             &datasets,
+            &[],
             &mut events,
         )?,
         InitramfsFlavor::InitramfsTools => install_initramfs_tools_hooks(
@@ -333,6 +342,8 @@ pub fn forge_key<P: ZfsProvider<Error = LockchainError> + Clone>(
                 .device_label
                 .as_deref()
                 .unwrap_or(LOCKCHAIN_LABEL),
+            device_uuid.as_deref(),
+            &[],
             &mut events,
         )?,
     }
@@ -347,7 +358,7 @@ pub fn forge_key<P: ZfsProvider<Error = LockchainError> + Clone>(
     drop(mount_guard); // unmount
     if options.rebuild_initramfs {
         rebuild_initramfs(&mut events, flavor)?;
-        audit_initramfs(&mut events, flavor)?;
+        audit_initramfs(&mut events, flavor, ProviderKind::Zfs)?;
     } else {
         events.push(event(
             WorkflowLevel::Warn,
@@ -360,6 +371,245 @@ pub fn forge_key<P: ZfsProvider<Error = LockchainError> + Clone>(
         events,
         recovery_key: Some(recovery_key_hex),
     })
+}
+
+/// Prepare the USB token, generate new key material, enroll it into a LUKS keyslot, and persist config.
+pub fn forge_luks_key<P: LuksProvider<Error = LockchainError> + Clone>(
+    config: &mut LockchainConfig,
+    provider: &P,
+    target: &str,
+    mode: ForgeMode,
+    mut options: ProvisionOptions,
+) -> LockchainResult<WorkflowReport> {
+    let mut events = Vec::new();
+
+    if !config.contains_mapping(target) {
+        return Err(LockchainError::DatasetNotConfigured(target.to_string()));
+    }
+
+    let enroll_passphrase = options
+        .luks_passphrase
+        .take()
+        .or_else(|| options.passphrase.clone())
+        .ok_or_else(|| {
+            LockchainError::InvalidConfig(
+                "existing LUKS passphrase required to enroll the LockChain key".into(),
+            )
+        })?;
+    let enroll_passphrase = Zeroizing::new(enroll_passphrase.into_bytes());
+
+    let usb_device = resolve_usb_device(&options, config)?;
+    events.push(event(
+        WorkflowLevel::Info,
+        format!("Using USB device {usb_device}"),
+    ));
+
+    let (usb_disk, usb_partition) = derive_device_layout(&usb_device)?;
+    events.push(event(
+        WorkflowLevel::Info,
+        format!("Disk {usb_disk} partition {usb_partition} selected"),
+    ));
+
+    let safe_mode = matches!(mode, ForgeMode::Safe);
+    if options.force_wipe || !safe_mode {
+        wipe_usb_token(&usb_disk, &usb_partition)?;
+        events.push(event(
+            WorkflowLevel::Success,
+            format!(
+                "Reinitialised {} with label {}",
+                usb_partition, LOCKCHAIN_LABEL
+            ),
+        ));
+    } else {
+        ensure_partition_label(&usb_partition)?;
+        events.push(event(
+            WorkflowLevel::Info,
+            format!(
+                "Safe mode: existing filesystem on {} validated for label {}",
+                usb_partition, LOCKCHAIN_LABEL
+            ),
+        ));
+    }
+
+    settle_udev()?;
+
+    let filename = options
+        .key_filename
+        .clone()
+        .unwrap_or_else(|| config.usb.device_key_path.clone());
+    let mountpoint = options.mountpoint.clone().unwrap_or_else(|| {
+        let label_dir = config
+            .usb
+            .device_label
+            .as_deref()
+            .map(str::trim)
+            .filter(|label| !label.is_empty() && !label_is_placeholder(label))
+            .unwrap_or(LOCKCHAIN_LABEL);
+        PathBuf::from(STAGING_ROOT).join(label_dir)
+    });
+    let key_path = mountpoint.join(&filename);
+    let pending_path = mountpoint.join(format!("{filename}.new"));
+
+    fs::create_dir_all(&mountpoint)?;
+    let mount_guard = MountGuard::mount(&usb_partition, &mountpoint)?;
+    events.push(event(
+        WorkflowLevel::Info,
+        format!("Mounted {} at {}", usb_partition, mountpoint.display()),
+    ));
+
+    if pending_path.exists() {
+        let _ = fs::remove_file(&pending_path);
+    }
+
+    let mut key_material = vec![0u8; 32];
+    OsRng.fill_bytes(&mut key_material);
+    let digest = hex::encode(Sha256::digest(&key_material));
+    let recovery_key_hex = hex::encode(&key_material);
+
+    write_key_with_remount(&pending_path, &key_material, &mountpoint, &mut events)?;
+    if fs::metadata(&pending_path)?.len() != 32 {
+        return Err(LockchainError::Provider(format!(
+            "generated key at {} is not 32 bytes; aborting provisioning",
+            pending_path.display()
+        )));
+    }
+    events.push(event(
+        WorkflowLevel::Success,
+        format!("Wrote key material to {}", pending_path.display()),
+    ));
+
+    if let Err(err) = provider.enroll_mapping_key(target, &enroll_passphrase, &pending_path) {
+        let _ = fs::remove_file(&pending_path);
+        return Err(err);
+    }
+    events.push(event(
+        WorkflowLevel::Success,
+        "Enrolled LockChain key into a LUKS keyslot.",
+    ));
+
+    if let Err(err) = replace_file(&pending_path, &key_path) {
+        let message = format!(
+            "failed to promote key file {} to {}: {err}",
+            pending_path.display(),
+            key_path.display()
+        );
+        return Err(LockchainError::Provider(message));
+    }
+    events.push(event(
+        WorkflowLevel::Success,
+        format!("Activated key at {}", key_path.display()),
+    ));
+
+    configure_fallback_passphrase(
+        &mut events,
+        config,
+        options.passphrase.take(),
+        &key_material,
+    )?;
+    events.push(event(
+        WorkflowLevel::Security,
+        "Recovery key generated. Record it securely before acknowledging the prompt.",
+    ));
+
+    let device_uuid = detect_partition_uuid(&usb_partition).ok().flatten();
+    update_config_luks(
+        config,
+        target,
+        key_path.clone(),
+        filename.clone(),
+        digest.clone(),
+        device_uuid.clone(),
+    )?;
+    events.push(event(
+        WorkflowLevel::Info,
+        format!(
+            "Config updated with key location {} and checksum {}",
+            key_path.display(),
+            digest
+        ),
+    ));
+
+    mount_guard.sync()?; // flush writes before unmount
+    drop(mount_guard); // unmount
+
+    let mappings: Vec<String> = config
+        .policy
+        .targets
+        .iter()
+        .map(|entry| entry.trim().to_string())
+        .filter(|entry| !entry.is_empty())
+        .collect();
+    if mappings.is_empty() {
+        return Err(LockchainError::InvalidConfig(
+            "policy.targets must contain at least one mapping before installing initramfs assets"
+                .into(),
+        ));
+    }
+
+    let flavor = detect_initramfs_flavor()?;
+    events.push(event(
+        WorkflowLevel::Info,
+        format!(
+            "Initramfs tooling detected: {}.",
+            match flavor {
+                InitramfsFlavor::Dracut => "dracut",
+                InitramfsFlavor::InitramfsTools => "initramfs-tools",
+            }
+        ),
+    ));
+
+    match flavor {
+        InitramfsFlavor::Dracut => install_dracut_module(
+            &mountpoint.to_string_lossy(),
+            &key_path,
+            filename.as_str(),
+            Some(&digest),
+            device_uuid.as_deref(),
+            &[],
+            &mappings,
+            &mut events,
+        )?,
+        InitramfsFlavor::InitramfsTools => install_initramfs_tools_hooks(
+            &mountpoint,
+            &key_path,
+            Some(&digest),
+            config
+                .usb
+                .device_label
+                .as_deref()
+                .unwrap_or(LOCKCHAIN_LABEL),
+            device_uuid.as_deref(),
+            &mappings,
+            &mut events,
+        )?,
+    }
+
+    if options.rebuild_initramfs {
+        rebuild_initramfs(&mut events, flavor)?;
+        audit_initramfs(&mut events, flavor, ProviderKind::Luks)?;
+    } else {
+        events.push(event(
+            WorkflowLevel::Warn,
+            "Initramfs rebuild skipped (rebuild=false). Ensure loader assets are regenerated manually.",
+        ));
+    }
+
+    Ok(WorkflowReport {
+        title: format!("Forged new LUKS key for {target}"),
+        events,
+        recovery_key: Some(recovery_key_hex),
+    })
+}
+
+fn replace_file(src: &Path, dest: &Path) -> io::Result<()> {
+    if fs::rename(src, dest).is_ok() {
+        return Ok(());
+    }
+
+    if dest.exists() {
+        fs::remove_file(dest)?;
+    }
+    fs::rename(src, dest)
 }
 
 /// Ensure the encryption root points at the installed key path for headless unlock.
@@ -583,7 +833,7 @@ fn device_from_uuid(uuid: &str) -> LockchainResult<Option<String>> {
     Ok(None)
 }
 
-/// Present the available removable media in a CLI-friendly prompt.
+/// Render an operator prompt listing removable media candidates.
 pub fn render_usb_selection_prompt(candidates: &[UsbCandidate]) -> String {
     if candidates.is_empty() {
         return "No removable USB storage detected; attach the key or specify device=/dev/sdX."
@@ -921,7 +1171,7 @@ fn predict_partition_name(disk: &str) -> String {
     }
 }
 
-/// Verify a partition already bears the expected Lockchain filesystem label.
+/// Verify a partition already bears the expected LockChain filesystem label.
 fn ensure_partition_label(partition: &str) -> LockchainResult<()> {
     let args = vec![
         OsString::from("-s"),
@@ -1128,6 +1378,62 @@ fn update_config(
     Ok(())
 }
 
+/// Persist the new key metadata for LUKS workflows back into the config file.
+fn update_config_luks(
+    config: &mut LockchainConfig,
+    target: &str,
+    dest_key_path: PathBuf,
+    device_key_filename: String,
+    checksum: String,
+    device_uuid: Option<String>,
+) -> LockchainResult<()> {
+    config.provider.r#type = ProviderKind::Luks;
+
+    if !config.policy.targets.iter().any(|entry| entry == target) {
+        config.policy.targets.push(target.to_string());
+    }
+
+    let file_name = device_key_filename;
+    let device_label = config
+        .usb
+        .device_label
+        .clone()
+        .filter(|label| !label_is_placeholder(label))
+        .unwrap_or_else(|| LOCKCHAIN_LABEL.to_string());
+
+    config.usb = Usb {
+        key_hex_path: dest_key_path.to_string_lossy().into_owned(),
+        host_backup_path: None,
+        expected_sha256: Some(checksum),
+        device_label: Some(device_label),
+        device_uuid,
+        device_key_path: file_name,
+        mount_timeout_secs: config.usb.mount_timeout_secs.max(10),
+    };
+
+    if config.policy.binary_path.is_none() {
+        config.policy.binary_path = Some("/usr/local/bin/lockchain-cli".to_string());
+    }
+
+    if config.luks.cryptsetup_path.is_none() {
+        config.luks.cryptsetup_path = Some(
+            detect_binary_path(KNOWN_CRYPTSETUP_PATHS)
+                .unwrap_or_else(|| "/usr/sbin/cryptsetup".to_string()),
+        );
+    }
+
+    if config.luks.crypttab_path.is_none() && Path::new("/etc/crypttab").exists() {
+        config.luks.crypttab_path = Some("/etc/crypttab".to_string());
+    }
+
+    if config.fallback.askpass_path.is_none() {
+        config.fallback.askpass_path = Some("/usr/bin/systemd-ask-password".to_string());
+    }
+
+    config.save()?;
+    Ok(())
+}
+
 /// RAII helper that unmounts the USB device when dropped.
 struct MountGuard {
     mountpoint: PathBuf,
@@ -1271,6 +1577,7 @@ pub(crate) fn install_dracut_module(
     checksum: Option<&str>,
     token_uuid: Option<&str>,
     datasets: &[String],
+    mappings: &[String],
     events: &mut Vec<WorkflowEvent>,
 ) -> LockchainResult<()> {
     let ctx = DracutContext {
@@ -1280,6 +1587,7 @@ pub(crate) fn install_dracut_module(
         checksum: checksum.map(|s| s.to_string()),
         token_uuid: token_uuid.map(|s| s.to_string()),
         datasets: datasets.to_vec(),
+        mappings: mappings.to_vec(),
     };
     let module = DracutModule::install(&ctx)?;
     events.push(event(
@@ -1314,6 +1622,8 @@ fn install_initramfs_tools_hooks(
     key_path: &Path,
     checksum: Option<&str>,
     token_label: &str,
+    token_uuid: Option<&str>,
+    mappings: &[String],
     events: &mut Vec<WorkflowEvent>,
 ) -> LockchainResult<()> {
     let hook_path = Path::new(INITRAMFS_HOOK_PATH);
@@ -1325,7 +1635,7 @@ set -e
 
 . /usr/share/initramfs-tools/hook-functions
 
-for bin in zfs blkid mount umount mountpoint sha256sum stat; do
+    for bin in zfs blkid mount umount mountpoint sha256sum stat awk tr wc cat chmod mv; do
     if command -v "$bin" >/dev/null 2>&1; then
         copy_exec "$(command -v "$bin")"
     fi
@@ -1342,6 +1652,8 @@ done
     let mountpoint_str = mountpoint.to_string_lossy();
     let key_path_str = key_path.to_string_lossy();
     let checksum_str = checksum.unwrap_or("").to_string();
+    let uuid_str = token_uuid.unwrap_or("").to_string();
+    let mappings_str = mappings.join(" ");
 
     let local_top_content = format!(
         r#"#!/bin/sh
@@ -1359,6 +1671,10 @@ case "$1" in
         exit 0
         ;;
 esac
+
+if ! command -v zfs >/dev/null 2>&1; then
+    exit 0
+fi
 
 TOKEN_LABEL="{label}"
 MOUNTPOINT="{mountpoint}"
@@ -1443,12 +1759,163 @@ fi
     fs::write(local_top_path, local_top_content)?;
     fs::set_permissions(local_top_path, fs::Permissions::from_mode(0o755))?;
 
+    let init_top_path = Path::new(INITRAMFS_INIT_TOP_LUKS_PATH);
+    if let Some(parent) = init_top_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let init_top_content = format!(
+        r#"#!/bin/sh
+set -u
+
+MAPPINGS="{mappings}"
+TOKEN_LABEL="{label}"
+TOKEN_UUID="{uuid}"
+MOUNTPOINT="{mountpoint}"
+KEY_PATH="{key_path}"
+KEY_SHA256="{checksum}"
+DEST_DIR="/run/cryptsetup-keys.d"
+MAX_WAIT=30
+SOURCE_WAIT=90
+SLEEP_INTERVAL=1
+MOUNT_OPTS="ro,nosuid,nodev,noexec"
+
+log() {{
+    echo "lockchain: $*" >&2
+}}
+
+if [ -z "$MAPPINGS" ]; then
+    exit 0
+fi
+
+wait_for_device() {{
+    elapsed=0
+    while [ "$elapsed" -lt "$MAX_WAIT" ]; do
+        if blkid -L "$TOKEN_LABEL" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep "$SLEEP_INTERVAL"
+        elapsed=$((elapsed + SLEEP_INTERVAL))
+    done
+    return 1
+}}
+
+wait_for_source_key() {{
+    path="$1"
+    elapsed=0
+    while [ "$elapsed" -lt "$SOURCE_WAIT" ]; do
+        if [ -f "$path" ]; then
+            return 0
+        fi
+        sleep "$SLEEP_INTERVAL"
+        elapsed=$((elapsed + SLEEP_INTERVAL))
+    done
+    return 1
+}}
+
+if ! wait_for_device; then
+    log "token $TOKEN_LABEL not detected within $MAX_WAIT seconds; deferring to native prompts."
+    exit 0
+fi
+
+DEVICE="$(blkid -L "$TOKEN_LABEL" 2>/dev/null || true)"
+if [ -z "$DEVICE" ]; then
+    log "token not detected; skipping key staging"
+    exit 0
+fi
+
+if [ -n "$TOKEN_UUID" ]; then
+    actual_uuid="$(blkid -s UUID -o value "$DEVICE" 2>/dev/null || true)"
+    if [ -z "$actual_uuid" ] || [ "$actual_uuid" != "$TOKEN_UUID" ]; then
+        log "token UUID mismatch; refusing to stage keys"
+        exit 0
+    fi
+fi
+
+mkdir -p "$MOUNTPOINT"
+if mountpoint -q "$MOUNTPOINT"; then
+    :
+elif ! mount -o "$MOUNT_OPTS" "$DEVICE" "$MOUNTPOINT"; then
+    log "unable to mount token at $MOUNTPOINT"
+    exit 0
+fi
+
+if ! wait_for_source_key "$KEY_PATH"; then
+    log "key file $KEY_PATH not detected within $SOURCE_WAIT seconds; deferring to native prompts."
+    exit 0
+fi
+
+size=$(stat -c '%s' "$KEY_PATH" 2>/dev/null || echo 0)
+if [ "$size" -ne 32 ]; then
+    log "key file must be 32 bytes (found $size); deferring to native prompts."
+    exit 0
+fi
+
+if [ -n "$KEY_SHA256" ]; then
+    set -- $(sha256sum "$KEY_PATH" 2>/dev/null || echo "")
+    actual="$1"
+    if [ -z "$actual" ] || [ "$actual" != "$KEY_SHA256" ]; then
+        log "checksum mismatch for $KEY_PATH; refusing to stage keys."
+        exit 0
+    fi
+fi
+
+mkdir -p "$DEST_DIR" 2>/dev/null || true
+chmod 700 "$DEST_DIR" 2>/dev/null || true
+if ! touch "$DEST_DIR/.rwtest" 2>/dev/null; then
+    umount "$DEST_DIR" 2>/dev/null || true
+    mount -t tmpfs -o rw,nosuid,nodev,mode=700 lockchain-cryptsetup-keys "$DEST_DIR" 2>/dev/null || true
+    if ! touch "$DEST_DIR/.rwtest" 2>/dev/null; then
+        log "unable to prepare staging directory $DEST_DIR; refusing to stage keys."
+        exit 0
+    fi
+fi
+rm -f "$DEST_DIR/.rwtest" 2>/dev/null || true
+
+umask 077
+for mapping in $MAPPINGS; do
+    case "$mapping" in
+        ""|*[!A-Za-z0-9_.-]*)
+            log "skipping unsafe mapping name $mapping"
+            continue
+            ;;
+    esac
+    tmp="$DEST_DIR/.$mapping.key.$$"
+    dest="$DEST_DIR/$mapping.key"
+    if ! cat "$KEY_PATH" >"$tmp" 2>/dev/null; then
+        rm -f "$tmp" 2>/dev/null || true
+        log "failed to stage key for $mapping"
+        continue
+    fi
+    chmod 0400 "$tmp" 2>/dev/null || true
+    if ! mv -f "$tmp" "$dest" 2>/dev/null; then
+        rm -f "$tmp" 2>/dev/null || true
+        log "failed to promote staged key for $mapping"
+        continue
+    fi
+    chmod 0400 "$dest" 2>/dev/null || true
+done
+
+exit 0
+"#,
+        mappings = mappings_str,
+        label = token_label,
+        uuid = uuid_str,
+        mountpoint = mountpoint_str,
+        key_path = key_path_str,
+        checksum = checksum_str
+    );
+
+    fs::write(init_top_path, init_top_content)?;
+    fs::set_permissions(init_top_path, fs::Permissions::from_mode(0o755))?;
+
     events.push(event(
         WorkflowLevel::Info,
         format!(
-            "Initramfs-tools hook installed at {} and local-top script at {}.",
+            "Initramfs-tools hook installed at {}, local-top script at {}, and init-top script at {}.",
             hook_path.display(),
-            local_top_path.display()
+            local_top_path.display(),
+            init_top_path.display()
         ),
     ));
     Ok(())
@@ -1504,6 +1971,7 @@ pub(crate) fn rebuild_initramfs(
 fn audit_initramfs(
     events: &mut Vec<WorkflowEvent>,
     flavor: InitramfsFlavor,
+    provider: ProviderKind,
 ) -> LockchainResult<()> {
     for candidate in LSINITRD_BINARIES {
         if Path::new(candidate).exists() {
@@ -1515,19 +1983,45 @@ fn audit_initramfs(
             }
             let manifest = String::from_utf8_lossy(&output.stdout);
             let missing: Vec<&str> = match flavor {
-                InitramfsFlavor::Dracut => [
-                    "lockchain-load-key.sh",
-                    "lockchain-load-key.service",
-                    "zfs-load-key.service.d/lockchain.conf",
-                    "run-lockchain.mount",
-                ]
-                .iter()
-                .copied()
-                .filter(|needle| !manifest.contains(needle))
-                .collect(),
+                InitramfsFlavor::Dracut => match provider {
+                    ProviderKind::Zfs => [
+                        "lockchain-load-key.sh",
+                        "lockchain-load-key.service",
+                        "zfs-load-key.service.d/lockchain.conf",
+                        "run-lockchain.mount",
+                    ]
+                    .iter()
+                    .copied()
+                    .filter(|needle| !manifest.contains(needle))
+                    .collect(),
+                    ProviderKind::Luks => [
+                        "lockchain-cryptsetup-keys.sh",
+                        "lockchain-cryptsetup-keys.service",
+                        "systemd-cryptsetup@.service.d/lockchain.conf",
+                        "run-lockchain.mount",
+                    ]
+                    .iter()
+                    .copied()
+                    .filter(|needle| !manifest.contains(needle))
+                    .collect(),
+                    ProviderKind::Auto => [
+                        "lockchain-load-key.sh",
+                        "lockchain-load-key.service",
+                        "zfs-load-key.service.d/lockchain.conf",
+                        "lockchain-cryptsetup-keys.sh",
+                        "lockchain-cryptsetup-keys.service",
+                        "systemd-cryptsetup@.service.d/lockchain.conf",
+                        "run-lockchain.mount",
+                    ]
+                    .iter()
+                    .copied()
+                    .filter(|needle| !manifest.contains(needle))
+                    .collect(),
+                },
                 InitramfsFlavor::InitramfsTools => [
                     "initramfs-tools/hooks/zz-lockchain",
                     "initramfs-tools/scripts/local-top/lockchain",
+                    "initramfs-tools/scripts/init-top/00-lockchain-cryptsetup-keys",
                 ]
                 .iter()
                 .copied()
@@ -1559,14 +2053,14 @@ pub(crate) fn repair_boot_assets(
     config: &LockchainConfig,
     events: &mut Vec<WorkflowEvent>,
 ) -> LockchainResult<()> {
-    let datasets: Vec<String> = config
+    let targets: Vec<String> = config
         .policy
         .targets
         .iter()
         .map(|d| d.trim().to_string())
         .filter(|d| !d.is_empty())
         .collect();
-    if datasets.is_empty() {
+    if targets.is_empty() {
         events.push(event(
             WorkflowLevel::Error,
             "policy.targets is empty; set at least one encryption root before staging initramfs assets.",
@@ -1575,6 +2069,15 @@ pub(crate) fn repair_boot_assets(
             "policy.targets missing entries".into(),
         ));
     }
+
+    let provider = config
+        .resolve_provider_kind()
+        .unwrap_or(config.provider.r#type);
+    let (datasets, mappings): (Vec<String>, Vec<String>) = match provider {
+        ProviderKind::Zfs => (targets, Vec::new()),
+        ProviderKind::Luks => (Vec::new(), targets),
+        ProviderKind::Auto => (targets.clone(), targets),
+    };
 
     let dest_path = config.key_hex_path();
     let key_filename = dest_path
@@ -1605,6 +2108,7 @@ pub(crate) fn repair_boot_assets(
             config.usb.expected_sha256.as_deref(),
             config.usb.device_uuid.as_deref(),
             &datasets,
+            &mappings,
             events,
         )?,
         InitramfsFlavor::InitramfsTools => install_initramfs_tools_hooks(
@@ -1616,11 +2120,13 @@ pub(crate) fn repair_boot_assets(
                 .device_label
                 .as_deref()
                 .unwrap_or(LOCKCHAIN_LABEL),
+            config.usb.device_uuid.as_deref(),
+            &mappings,
             events,
         )?,
     }
     rebuild_initramfs(events, flavor)?;
-    audit_initramfs(events, flavor)
+    audit_initramfs(events, flavor, provider)
 }
 
 /// Details required to render the dracut hook for this deployment.
@@ -1631,6 +2137,7 @@ struct DracutContext {
     checksum: Option<String>,
     token_uuid: Option<String>,
     datasets: Vec<String>,
+    mappings: Vec<String>,
 }
 
 /// Represents the installed dracut module directory.
@@ -1646,20 +2153,38 @@ impl DracutModule {
 
         let script = module.join("lockchain-load-key.sh");
         let service = module.join("lockchain-load-key.service");
+        let luks_script = module.join("lockchain-cryptsetup-keys.sh");
+        let luks_service = module.join("lockchain-cryptsetup-keys.service");
         let dropin_key_dir = module.join("zfs-load-key.service.d");
         let dropin_module_dir = module.join("zfs-load-module.service.d");
+        let dropin_cryptsetup_dir = module.join("systemd-cryptsetup@.service.d");
         let dropin_key = dropin_key_dir.join("lockchain.conf");
         let dropin_module = dropin_module_dir.join("lockchain.conf");
+        let dropin_cryptsetup = dropin_cryptsetup_dir.join("lockchain.conf");
         let setup = module.join("module-setup.sh");
         let mount_unit = module.join("run-lockchain.mount");
 
         fs::create_dir_all(&dropin_key_dir)?;
         fs::create_dir_all(&dropin_module_dir)?;
+        fs::create_dir_all(&dropin_cryptsetup_dir)?;
 
         write_template(&script, LOCKCHAIN_LOAD_KEY_TEMPLATE, ctx, 0o750)?;
         write_template(&service, LOCKCHAIN_SERVICE_TEMPLATE, ctx, 0o644)?;
+        write_template(&luks_script, LOCKCHAIN_CRYPTSETUP_KEYS_TEMPLATE, ctx, 0o750)?;
+        write_template(
+            &luks_service,
+            LOCKCHAIN_CRYPTSETUP_KEYS_SERVICE_TEMPLATE,
+            ctx,
+            0o644,
+        )?;
         write_template(&dropin_key, LOCKCHAIN_DROPIN_TEMPLATE, ctx, 0o644)?;
         write_template(&dropin_module, LOCKCHAIN_ZFS_DROPIN_TEMPLATE, ctx, 0o644)?;
+        write_template(
+            &dropin_cryptsetup,
+            LOCKCHAIN_CRYPTSETUP_DROPIN_TEMPLATE,
+            ctx,
+            0o644,
+        )?;
         write_template(&setup, LOCKCHAIN_MODULE_SETUP_TEMPLATE, ctx, 0o750)?;
         write_template(&mount_unit, LOCKCHAIN_MOUNT_TEMPLATE, ctx, 0o644)?;
 
@@ -1707,6 +2232,7 @@ fn write_template(
             ctx.token_uuid.clone().unwrap_or_default().as_str(),
         )
         .replace("{{DATASETS}}", ctx.datasets.join(" ").as_str())
+        .replace("{{MAPPINGS}}", ctx.mappings.join(" ").as_str())
         .replace("{{SERVICE_NAME}}", "lockchain-load-key.service")
         .replace("{{SCRIPT_NAME}}", "lockchain-load-key.sh")
         .replace("{{DROPIN_NAME}}", "lockchain.conf")
@@ -1726,4 +2252,10 @@ const LOCKCHAIN_ZFS_DROPIN_TEMPLATE: &str =
     include_str!("../../templates/lockchain-zfs-load-module.conf");
 const LOCKCHAIN_MODULE_SETUP_TEMPLATE: &str =
     include_str!("../../templates/lockchain-module-setup.sh");
+const LOCKCHAIN_CRYPTSETUP_KEYS_TEMPLATE: &str =
+    include_str!("../../templates/lockchain-cryptsetup-keys.sh");
+const LOCKCHAIN_CRYPTSETUP_KEYS_SERVICE_TEMPLATE: &str =
+    include_str!("../../templates/lockchain-cryptsetup-keys.service");
+const LOCKCHAIN_CRYPTSETUP_DROPIN_TEMPLATE: &str =
+    include_str!("../../templates/lockchain-cryptsetup-keys.conf");
 const LOCKCHAIN_MOUNT_TEMPLATE: &str = include_str!("../../templates/run-lockchain.mount");

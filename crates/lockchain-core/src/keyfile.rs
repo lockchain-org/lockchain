@@ -3,8 +3,12 @@
 use crate::error::{LockchainError, LockchainResult};
 use hex::FromHex;
 use std::fs;
+use std::io::Write;
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
+use tempfile::NamedTempFile;
 use zeroize::Zeroizing;
 
 /// Result of decoding a key file or byte stream.
@@ -75,12 +79,71 @@ pub fn decode_key_bytes(origin: &Path, bytes: &[u8]) -> LockchainResult<DecodedK
 
 /// Write raw key material to `path`, applying restrictive permissions.
 pub fn write_raw_key_file(path: &Path, key: &[u8]) -> LockchainResult<()> {
-    if let Some(parent) = path.parent() {
+    let dest = resolve_write_path(path)?;
+    let parent = dest
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    if !parent.as_os_str().is_empty() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(path, key)?;
-    fs::set_permissions(path, std::fs::Permissions::from_mode(0o400))?;
+
+    let ownership = fs::metadata(&dest)
+        .ok()
+        .map(|meta| (meta.uid(), meta.gid()));
+
+    let mut temp = NamedTempFile::new_in(parent)?;
+    temp.as_file_mut().write_all(key)?;
+    temp.as_file_mut().flush()?;
+    fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o400))?;
+
+    if let Some((uid, gid)) = ownership {
+        let rc = unsafe { libc::fchown(temp.as_file().as_raw_fd(), uid, gid) };
+        if rc != 0 {
+            return Err(LockchainError::Io(std::io::Error::last_os_error()));
+        }
+    }
+
+    let _ = temp.as_file().sync_all();
+    temp.persist(&dest)
+        .map_err(|err| LockchainError::Io(err.error))?;
+    let _ = sync_parent_dir(parent);
     Ok(())
+}
+
+fn resolve_write_path(path: &Path) -> LockchainResult<PathBuf> {
+    let mut candidate = path.to_path_buf();
+    for _ in 0..16 {
+        let meta = match fs::symlink_metadata(&candidate) {
+            Ok(meta) => meta,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(candidate),
+            Err(err) => return Err(LockchainError::Io(err)),
+        };
+
+        if !meta.file_type().is_symlink() {
+            return Ok(candidate);
+        }
+
+        let target = fs::read_link(&candidate).map_err(LockchainError::Io)?;
+        candidate = if target.is_absolute() {
+            target
+        } else {
+            candidate
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."))
+                .join(target)
+        };
+    }
+
+    Err(LockchainError::Provider(format!(
+        "symlink resolution depth exceeded for {}",
+        path.display()
+    )))
+}
+
+fn sync_parent_dir(dir: &Path) -> std::io::Result<()> {
+    fs::File::open(dir).and_then(|file| file.sync_all())
 }
 
 fn invalid_key(path: &Path, reason: impl Into<String>) -> LockchainError {

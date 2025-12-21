@@ -107,7 +107,6 @@ WantedBy=local-fs.target
     Ok(())
 }
 
-/// Build a systemd-friendly identifier for the USB key device.
 /// Run `systemctl daemon-reload` and surface any warnings.
 fn reload_systemd(systemctl: &Path, events: &mut Vec<WorkflowEvent>) {
     match Command::new(systemctl).args(["daemon-reload"]).output() {

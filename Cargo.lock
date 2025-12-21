@@ -2136,6 +2136,7 @@ dependencies = [
  "anyhow",
  "clap",
  "crossterm",
+ "hex",
  "lockchain-core",
  "lockchain-luks",
  "lockchain-zfs",
@@ -2144,6 +2145,7 @@ dependencies = [
  "rpassword",
  "schemars",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -2204,9 +2206,12 @@ dependencies = [
 name = "lockchain-luks"
 version = "0.2.1"
 dependencies = [
+ "hex",
  "lockchain-core",
  "lockchain-provider",
  "log",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]
@@ -2225,6 +2230,7 @@ dependencies = [
  "iced",
  "iced_aw",
  "lockchain-core",
+ "lockchain-luks",
  "lockchain-zfs",
  "log",
  "qrcodegen",

@@ -116,10 +116,7 @@ fn recover_key_writes_expected_material_and_permissions() {
     let dataset = "tank/secure";
 
     let provider = StubProvider;
-    let expected_key = {
-        let service = LockchainService::new(Arc::new(config.clone()), provider.clone());
-        service.derive_fallback_key(passphrase).unwrap()
-    };
+    let expected_key = crate::fallback::derive_fallback_key(&config, passphrase).unwrap();
 
     let report = recover_key(
         &config,

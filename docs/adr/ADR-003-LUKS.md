@@ -16,7 +16,7 @@ ZFS unlocks are already provider-driven and support early-boot integration (drac
 
 - **Initrd compatibility** — Support both dracut and initramfs-tools with minimal dependencies in early boot.
 - **cryptsetup/crypttab alignment** — Work with the distro’s normal LUKS orchestration (`/etc/crypttab`) instead of inventing a parallel mechanism.
-- **Key custody** — Key material is always normalised to `/run/lockchain/key.raw` and validated (checksum + identity enforcement) before use.
+- **Key custody** — Key material stays on the USB token and is only staged into RAM (`/run/cryptsetup-keys.d/` and/or `/run/lockchain`) after checksum + identity enforcement.
 - **Operational ergonomics** — Keep patterns legible for platform teams; avoid fragile hacks that drift on updates.
 
 ## Decision
@@ -26,8 +26,9 @@ ZFS unlocks are already provider-driven and support early-boot integration (drac
 3. Use `cryptsetup` as the execution substrate and treat `crypttab` as the source of truth for mappings.
 4. For root unlock, ship initrd hooks (dracut + initramfs-tools) that:
    - discover and mount the USB token by label/UUID
-   - validate key checksum and stage raw bytes into `/run/lockchain/key.raw`
-   - expose a `keyscript` entrypoint for `cryptsetup` to read the key material
+   - validate key checksum and identity constraints
+   - stage key bytes into tmpfs at `/run/cryptsetup-keys.d/<volume-name>.key` with strict perms
+   - never write key material to persistent storage (USB-only custody; RAM staging only)
 
 ## `crypttab` Patterns
 
@@ -35,19 +36,23 @@ LockChain will support two common deployment lanes.
 
 ### 1) Root mapping (initrd)
 
-Use `keyscript=` so the initrd can fetch the key from LockChain’s staging path.
+Use `none` in the key-file field so `cryptsetup`/systemd will automatically look for a key file at:
+
+- `/run/cryptsetup-keys.d/<volume-name>.key` (preferred, tmpfs)
+- `/etc/cryptsetup-keys.d/<volume-name>.key` (persistent; not used by LockChain)
 
 Example:
 
 ```
-cryptroot UUID=<luks-uuid> none luks,discard,initramfs,keyscript=/usr/lib/lockchain/lockchain-keyscript
+cryptroot UUID=<luks-uuid> none luks,discard,initramfs
 ```
 
 Notes:
 
 - `initramfs` ensures the mapping is handled in early boot where required.
-- The `lockchain-keyscript` reads from `/run/lockchain/key.raw` (populated by LockChain’s initrd hook), and writes key bytes to stdout for `cryptsetup`.
-- Strict identity enforcement (USB UUID + SHA-256 checksum) happens before key material is staged.
+- The `<volume-name>` (first field) must match the LockChain target name under `policy.targets`.
+- LockChain stages `/run/cryptsetup-keys.d/cryptroot.key` in initrd (tmpfs, `0400`), and `cryptsetup` consumes it automatically.
+- Strict identity enforcement (USB UUID + SHA-256 checksum) happens before any key material is staged.
 
 ### 2) Non-root mappings (post-boot)
 
@@ -56,13 +61,15 @@ Non-root mappings can be unlocked by the daemon/CLI and optionally integrated wi
 Example crypttab entry (post-boot managed):
 
 ```
-vault UUID=<luks-uuid> none luks,noauto,keyscript=/usr/lib/lockchain/lockchain-keyscript
+vault UUID=<luks-uuid> none luks,noauto
 ```
 
 Notes:
 
 - `noauto` prevents boot stalls if the vault stick is absent.
-- `lockchain@.service` (provider selected by config) is intended to unlock a single mapping on demand.
+- The `<volume-name>` (first field) must match the LockChain target name under `policy.targets`.
+- `lockchain-key-usb` stages `/run/cryptsetup-keys.d/vault.key` while the token is present, so `systemd-cryptsetup@vault.service` can be started on demand.
+- `lockchain@.service` (provider selected by config) can also unlock mappings directly via the provider.
 
 ## Consequences
 
@@ -70,12 +77,12 @@ Notes:
 
 - Brings LUKS under the same provider-driven architecture as ZFS.
 - Retains distro-native behaviour for initrd unlock by integrating with crypttab rather than replacing it.
-- Keeps key handling consistent across providers: USB watcher → `/run/lockchain/key.raw` → provider unlock.
+- Keeps key handling consistent across providers: token mounted read-only → checksum/identity checks → keys staged in RAM (`/run/cryptsetup-keys.d`) → unlock workflows.
 
 **Trade-offs**
 
 - Requires careful initrd testing across both dracut and initramfs-tools.
-- crypttab differences across distributions must be handled defensively (options, keyscript paths, initramfs flags).
+- crypttab differences across distributions must be handled defensively (options, initramfs flags).
 
 ## Follow-up Work
 
@@ -85,6 +92,6 @@ Notes:
 - Add tests:
   - crypttab parser fixtures
   - cryptsetup command stubs
-  - unit tests for keyscript behaviour (no key leakage, strict failures)
+  - unit tests for initrd key staging behaviour (no key leakage, strict failures)
 
 — LockChain maintainers

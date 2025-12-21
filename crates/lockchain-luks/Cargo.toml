@@ -7,3 +7,8 @@ edition = "2021"
 lockchain-core = { path = "../lockchain-core" }
 lockchain-provider = { path = "../lockchain-provider" }
 log = "0.4"
+
+[dev-dependencies]
+hex = "0.4"
+sha2 = "0.10"
+tempfile = "3"

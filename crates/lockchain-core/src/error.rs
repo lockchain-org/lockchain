@@ -1,4 +1,4 @@
-//! Shared error codes and result aliases used throughout Lockchain core.
+//! Shared error codes and result aliases for `lockchain-core`.
 
 use std::path::PathBuf;
 use thiserror::Error;
@@ -6,7 +6,7 @@ use thiserror::Error;
 /// Result alias for core operations.
 pub type LockchainResult<T> = Result<T, LockchainError>;
 
-/// Canonical error list for Lockchain operations.
+/// Canonical error list for LockChain operations.
 #[derive(Error, Debug)]
 pub enum LockchainError {
     #[error("[LC1000] io error: {0}")]
@@ -27,10 +27,10 @@ pub enum LockchainError {
     #[error("[LC1101] provider selection error: {0}")]
     ProviderSelection(String),
 
-    #[error("[LC1200] dataset `{0}` is not declared in policy")]
+    #[error("[LC1200] target `{0}` is not declared in policy")]
     DatasetNotConfigured(String),
 
-    #[error("[LC1201] no key source configured for dataset `{0}`")]
+    #[error("[LC1201] no key source configured for target `{0}`")]
     MissingKeySource(String),
 
     #[error("[LC1300] failed to decode hex key at {path}: {reason}")]

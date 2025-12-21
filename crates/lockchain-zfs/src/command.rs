@@ -1,6 +1,7 @@
-//! Handles spawning the real `zfs` and `zpool` binaries with timeouts and
-//! friendly error handling. This is the glue between Lockchain and the host
-//! shell.
+//! Runs the host `zfs`/`zpool` binaries with timeouts and structured output capture.
+//!
+//! Keeping process execution here lets the provider focus on ZFS semantics and keeps
+//! command parsing testable with fake binaries.
 
 use lockchain_core::error::{LockchainError, LockchainResult};
 use std::io::{Read, Write};

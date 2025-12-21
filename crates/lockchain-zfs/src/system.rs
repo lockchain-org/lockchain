@@ -166,7 +166,7 @@ impl SystemZfsProvider {
         Ok(out)
     }
 
-    /// Map CLI output into the right `LockchainError` bucket with context.
+    /// Map CLI output into a `LockchainError` with context.
     fn classify_cli_error(binary: &Path, args: &[&str], output: &Output) -> LockchainError {
         let stderr = output.stderr.trim();
         let stdout = output.stdout.trim();
@@ -297,7 +297,7 @@ impl SystemZfsProvider {
         Ok(Self::parse_keystatus(out.stdout.trim()))
     }
 
-    /// Translate the raw `keystatus` field into Lockchain's enum.
+    /// Translate the raw `keystatus` field into `KeyState`.
     fn parse_keystatus(value: &str) -> KeyState {
         match value {
             "available" => KeyState::Available,

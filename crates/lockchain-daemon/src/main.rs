@@ -1,4 +1,4 @@
-//! Background daemon that watches the USB token and keeps datasets unlocked.
+//! Background daemon that watches for key material and keeps configured targets unlocked.
 
 use anyhow::{Context, Result};
 use lockchain_core::{

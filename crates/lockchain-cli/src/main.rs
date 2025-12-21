@@ -1,19 +1,20 @@
-//! Lockchain command-line interface: provisioning, maintenance, and unlock tooling.
+//! LockChain command-line interface for provisioning, maintenance, and unlock operations.
 
 use anyhow::{bail, ensure, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use lockchain_core::{
-    config::{
-        bootstrap_template, bootstrap_template_with, LockchainConfig, Policy, DEFAULT_CONFIG_PATH,
-    },
-    keyfile::write_raw_key_file,
+    config::{bootstrap_template, bootstrap_template_with, LockchainConfig, DEFAULT_CONFIG_PATH},
+    keyfile::{read_key_file, write_raw_key_file},
     logging, perf,
-    provider::{DatasetKeyDescriptor, KeyState, LuksKeyProvider, ProviderKind},
+    provider::{
+        DatasetKeyDescriptor, KeyState, LuksKeyProvider, LuksMappingDescriptor, LuksProvider,
+        LuksState, ProviderKind,
+    },
     workflow::{
         self, bootstrap_plan, discover_topology, BootstrapOptions, BootstrapPlan,
         BootstrapTopology, ForgeMode, ProvisionOptions, WorkflowLevel, WorkflowReport,
     },
-    LockchainService, UnlockOptions,
+    LockchainError, LockchainService, UnlockOptions,
 };
 use lockchain_luks::SystemLuksProvider;
 use lockchain_zfs::SystemZfsProvider;
@@ -21,8 +22,10 @@ use log::warn;
 use rpassword::prompt_password;
 use schemars::schema_for;
 use serde_json::to_string_pretty;
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{self, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -53,7 +56,7 @@ fn load_cli_config(path: &Path) -> Result<LockchainConfig> {
     about = "Key management utilities for LockChain deployments (ZFS + LUKS provider selection)."
 )]
 struct Cli {
-    /// Path to the Lockchain configuration file.
+    /// Path to the LockChain configuration file.
     #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
     config: PathBuf,
 
@@ -61,12 +64,12 @@ struct Cli {
     command: Commands,
 }
 
-/// Subcommands covering the full lifecycle of a Lockchain deployment.
+/// Subcommands covering the full lifecycle of a LockChain deployment.
 #[derive(Subcommand, Debug)]
 enum Commands {
     /// Provision a USB token with raw key material and refresh initramfs assets.
     Init {
-        /// Target dataset; defaults to the first entry in policy.targets.
+        /// Target dataset (ZFS) or mapping (LUKS); defaults to the first entry in policy.targets.
         dataset: Option<String>,
 
         /// USB block device (e.g. /dev/sdb1). When omitted, autodetect via label/UUID.
@@ -85,6 +88,14 @@ enum Commands {
         #[arg(long)]
         passphrase: Option<String>,
 
+        /// Existing LUKS passphrase used to enroll the generated key into a keyslot.
+        #[arg(long)]
+        luks_passphrase: Option<String>,
+
+        /// Prompt interactively for the existing LUKS passphrase.
+        #[arg(long)]
+        prompt_luks_passphrase: bool,
+
         /// Perform a non-destructive safety check instead of wiping the token.
         #[arg(long)]
         safe: bool,
@@ -102,7 +113,7 @@ enum Commands {
     #[command(alias = "self-heal", alias = "doctor")]
     Tuning,
 
-    /// Adjust persisted Lockchain configuration defaults.
+    /// Adjust persisted LockChain configuration defaults.
     Settings {
         /// Override the managed dataset list (comma separated for multiple datasets).
         #[arg(long)]
@@ -169,9 +180,9 @@ enum Commands {
         note: Option<String>,
     },
 
-    /// Perform a self-test using an ephemeral ZFS pool.
+    /// Perform a self-test using an ephemeral ZFS pool or loopback LUKS volume.
     SelfTest {
-        /// Dataset to validate; defaults to the first entry in policy.targets.
+        /// Target dataset (ZFS) or mapping (LUKS); defaults to the first entry in policy.targets.
         dataset: Option<String>,
 
         /// Require the USB token and skip fallback handling during the drill.
@@ -213,7 +224,7 @@ enum Commands {
 
     /// Derive the fallback key and write it to disk (emergency only).
     Breakglass {
-        /// Dataset to target; defaults to the first entry in policy.targets.
+        /// Target dataset (ZFS) or mapping (LUKS); defaults to the first entry in policy.targets.
         dataset: Option<String>,
 
         /// File path to write the derived key material to.
@@ -348,6 +359,8 @@ fn run() -> Result<()> {
             mount,
             filename,
             passphrase,
+            luks_passphrase,
+            prompt_luks_passphrase,
             safe,
             force_wipe,
             no_rebuild,
@@ -355,17 +368,31 @@ fn run() -> Result<()> {
             workflow::ensure_privilege_support().map_err(anyhow::Error::new)?;
             let mut config = load_cli_config(&config_path)?;
             let provider_kind = config.resolve_provider_kind().map_err(anyhow::Error::new)?;
-            ensure!(
-                matches!(provider_kind, ProviderKind::Zfs),
-                "init is only supported for provider=zfs today"
-            );
-            let provider = SystemZfsProvider::from_config(&config)?;
-            let target = resolve_dataset(dataset, &config.policy)?;
+
+            if matches!(provider_kind, ProviderKind::Zfs)
+                && (luks_passphrase.is_some() || prompt_luks_passphrase)
+            {
+                bail!("--luks-passphrase is only valid when provider.type resolves to `luks`");
+            }
+
+            let luks_passphrase =
+                if matches!(provider_kind, ProviderKind::Luks) && prompt_luks_passphrase {
+                    ensure!(
+                        luks_passphrase.is_none(),
+                        "cannot combine --luks-passphrase with --prompt-luks-passphrase"
+                    );
+                    Some(prompt_password("Existing LUKS passphrase: ")?)
+                } else {
+                    luks_passphrase
+                };
+
+            let target = resolve_target(dataset, &config, provider_kind)?;
             let options = ProvisionOptions {
                 usb_device: device,
                 mountpoint: mount,
                 key_filename: filename,
                 passphrase,
+                luks_passphrase,
                 force_wipe,
                 rebuild_initramfs: !no_rebuild,
             };
@@ -374,8 +401,21 @@ fn run() -> Result<()> {
             } else {
                 ForgeMode::Standard
             };
-            let report = workflow::forge_key(&mut config, &provider, &target, mode, options)
-                .map_err(anyhow::Error::new)?;
+            let report = match provider_kind {
+                ProviderKind::Zfs => {
+                    let provider = SystemZfsProvider::from_config(&config)?;
+                    workflow::forge_key(&mut config, &provider, &target, mode, options)
+                        .map_err(anyhow::Error::new)?
+                }
+                ProviderKind::Luks => {
+                    let provider = SystemLuksProvider::from_config(&config)?;
+                    workflow::forge_luks_key(&mut config, &provider, &target, mode, options)
+                        .map_err(anyhow::Error::new)?
+                }
+                ProviderKind::Auto => {
+                    unreachable!("resolve_provider_kind must return a concrete kind")
+                }
+            };
             print_report(report);
             return Ok(());
         }
@@ -640,30 +680,44 @@ fn run() -> Result<()> {
         } => {
             let config = Arc::new(load_cli_config(&config_path)?);
             let provider_kind = config.resolve_provider_kind().map_err(anyhow::Error::new)?;
-            ensure!(
-                matches!(provider_kind, ProviderKind::Zfs),
-                "breakglass is only supported for provider=zfs today"
-            );
-            let provider = SystemZfsProvider::from_config(&config)?;
-            let service = LockchainService::new(config.clone(), provider);
 
-            let target = resolve_dataset(dataset, &config.policy)?;
+            let target = resolve_target(dataset, &config, provider_kind)?;
             if !config.fallback.enabled {
-                bail!("fallback recovery is not enabled in this configuration");
+                bail!(LockchainError::InvalidConfig(
+                    "fallback recovery is not enabled in this configuration".into()
+                ));
             }
-            if config.fallback.passphrase_salt.is_none() || config.fallback.passphrase_xor.is_none()
+            if config
+                .fallback
+                .passphrase_salt
+                .as_deref()
+                .map(|value| value.trim().is_empty())
+                .unwrap_or(true)
+                || config
+                    .fallback
+                    .passphrase_xor
+                    .as_deref()
+                    .map(|value| value.trim().is_empty())
+                    .unwrap_or(true)
             {
-                bail!("fallback configuration is incomplete (salt/xor missing)");
+                bail!(LockchainError::InvalidConfig(
+                    "fallback configuration is incomplete (salt/xor missing)".into()
+                ));
             }
 
             if !force {
+                let label = match provider_kind {
+                    ProviderKind::Zfs => "dataset",
+                    ProviderKind::Luks => "mapping",
+                    ProviderKind::Auto => "target",
+                };
                 println!("*** BREAK-GLASS RECOVERY ***");
                 println!(
-                    "This will derive the raw key for dataset `{}` and write it to {}.",
-                    target,
+                    "This will derive the raw key for {label} `{}` and write it to {}.",
+                    &target,
                     output.display()
                 );
-                println!("Type the dataset name to continue or press Enter to abort:");
+                println!("Type the {label} name to continue or press Enter to abort:");
                 print!("> ");
                 io::stdout().flush().ok();
                 let mut confirm_dataset = String::new();
@@ -689,11 +743,16 @@ fn run() -> Result<()> {
                 None => prompt_password(format!("Emergency passphrase for {target}: "))?,
             };
 
-            let key = service.derive_fallback_key(passphrase.as_bytes())?;
+            let key = lockchain_core::derive_fallback_key(&config, passphrase.as_bytes())?;
             write_raw_key_file(&output, &key)?;
 
+            let label = match provider_kind {
+                ProviderKind::Zfs => "dataset",
+                ProviderKind::Luks => "mapping",
+                ProviderKind::Auto => "target",
+            };
             warn!(
-                "[LC4000] break-glass recovery invoked for dataset {target}, output {}",
+                "[LC4000] break-glass recovery invoked for {label} {target}, output {}",
                 output.display()
             );
             println!(
@@ -709,14 +768,24 @@ fn run() -> Result<()> {
             workflow::ensure_privilege_support().map_err(anyhow::Error::new)?;
             let config = load_cli_config(&config_path)?;
             let provider_kind = config.resolve_provider_kind().map_err(anyhow::Error::new)?;
-            ensure!(
-                matches!(provider_kind, ProviderKind::Zfs),
-                "self-test is only supported for provider=zfs today"
-            );
-            let provider = SystemZfsProvider::from_config(&config)?;
-            let target = resolve_dataset(dataset, &config.policy)?;
-            let report = workflow::self_test(&config, provider, &target, strict_usb)
-                .map_err(anyhow::Error::new)?;
+            let target = resolve_target(dataset, &config, provider_kind)?;
+            let report = match provider_kind {
+                ProviderKind::Zfs => {
+                    let provider = SystemZfsProvider::from_config(&config)?;
+                    workflow::self_test(&config, provider, &target, strict_usb)
+                        .map_err(anyhow::Error::new)?
+                }
+                ProviderKind::Luks => workflow::self_test_luks(
+                    &config,
+                    |cfg| SystemLuksProvider::from_config(cfg),
+                    &target,
+                    strict_usb,
+                )
+                .map_err(anyhow::Error::new)?,
+                ProviderKind::Auto => {
+                    unreachable!("resolve_provider_kind must return a concrete kind")
+                }
+            };
             print_report(report);
             return Ok(());
         }
@@ -934,22 +1003,24 @@ fn run() -> Result<()> {
         Commands::ListKeys => {
             let config = Arc::new(load_cli_config(&config_path)?);
             let provider_kind = config.resolve_provider_kind().map_err(anyhow::Error::new)?;
-            let snapshot = match provider_kind {
+            print_staging_report(provider_kind, &config);
+
+            match provider_kind {
                 ProviderKind::Zfs => {
                     let provider = SystemZfsProvider::from_config(&config)?;
                     let service = LockchainService::new(config.clone(), provider);
-                    service.list_keys()?
+                    let snapshot = service.list_keys()?;
+                    print_key_table(provider_kind, snapshot);
                 }
                 ProviderKind::Luks => {
-                    let provider = LuksKeyProvider::new(SystemLuksProvider::from_config(&config)?);
-                    let service = LockchainService::new(config.clone(), provider);
-                    service.list_keys()?
+                    let provider = SystemLuksProvider::from_config(&config)?;
+                    let mappings = provider.list_mappings()?;
+                    print_luks_table(&config, mappings);
                 }
                 ProviderKind::Auto => {
                     unreachable!("resolve_provider_kind must return a concrete kind")
                 }
-            };
-            print_key_table(provider_kind, snapshot);
+            }
         }
         Commands::Tui => {
             let config = Arc::new(load_cli_config(&config_path)?);
@@ -1131,18 +1202,6 @@ fn build_unlock_options(
     Ok(options)
 }
 
-/// Pick a dataset from CLI input or fall back to the first policy entry.
-fn resolve_dataset(dataset: Option<String>, policy: &Policy) -> Result<String> {
-    if let Some(ds) = dataset {
-        return Ok(ds);
-    }
-    policy
-        .targets
-        .first()
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("no targets configured in policy.targets"))
-}
-
 /// Pick a provider-aware target from CLI input or fall back to the first policy entry.
 fn resolve_target(
     target: Option<String>,
@@ -1184,5 +1243,160 @@ fn print_key_table(provider: ProviderKind, snapshot: Vec<DatasetKeyDescriptor>) 
             "{:<32} {:<32} {}",
             entry.dataset, entry.encryption_root, status
         );
+    }
+}
+
+/// Filesystem view of a staged key file (metadata plus optional digest).
+#[derive(Debug, Clone)]
+struct KeyFileSummary {
+    present: bool,
+    size: Option<u64>,
+    mode: Option<u32>,
+    sha256: Option<String>,
+    error: Option<String>,
+}
+
+/// Inspect a key file on disk.
+///
+/// The digest is computed over decoded key material (raw or hex-encoded).
+fn inspect_key_file(path: &Path) -> KeyFileSummary {
+    let metadata = match fs::metadata(path) {
+        Ok(meta) => meta,
+        Err(err) => {
+            return KeyFileSummary {
+                present: false,
+                size: None,
+                mode: None,
+                sha256: None,
+                error: if err.kind() == std::io::ErrorKind::NotFound {
+                    None
+                } else {
+                    Some(err.to_string())
+                },
+            };
+        }
+    };
+
+    let mode = metadata.permissions().mode() & 0o777;
+    let (sha256, error) = match read_key_file(path) {
+        Ok((key, _)) => (Some(hex::encode(Sha256::digest(&key))), None),
+        Err(err) => (None, Some(err.to_string())),
+    };
+
+    KeyFileSummary {
+        present: metadata.is_file(),
+        size: Some(metadata.len()),
+        mode: Some(mode),
+        sha256,
+        error,
+    }
+}
+
+/// Return the configured expected checksum, trimmed, when set.
+fn expected_checksum(config: &LockchainConfig) -> Option<&str> {
+    config
+        .usb
+        .expected_sha256
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+/// Print key staging and checksum status for the active provider.
+fn print_staging_report(provider: ProviderKind, config: &LockchainConfig) {
+    let provider_label = match provider {
+        ProviderKind::Zfs => "zfs",
+        ProviderKind::Luks => "luks",
+        ProviderKind::Auto => "auto",
+    };
+    println!("Provider: {provider_label}");
+
+    let expected = expected_checksum(config);
+    let host_key_path = config.key_hex_path();
+    let host = inspect_key_file(&host_key_path);
+    let host_mode = host
+        .mode
+        .map(|mode| format!("{mode:04o}"))
+        .unwrap_or_else(|| "----".to_string());
+    let host_size = host
+        .size
+        .map(|size| size.to_string())
+        .unwrap_or_else(|| "-".to_string());
+    let host_sha = host.sha256.as_deref().unwrap_or("-");
+    let expected_sha = expected.unwrap_or("-");
+    let checksum_status = match (expected, host.sha256.as_deref()) {
+        (Some(exp), Some(actual)) if exp.eq_ignore_ascii_case(actual) => "match",
+        (Some(_), Some(_)) => "mismatch",
+        (Some(_), None) => "unavailable",
+        (None, Some(_)) => "unset",
+        (None, None) => "unset",
+    };
+
+    let presence = if host.present { "present" } else { "missing" };
+    println!(
+        "Keyfile: {} ({presence}, {host_size} bytes, mode {host_mode})",
+        host_key_path.display()
+    );
+    println!("SHA-256: actual={host_sha} expected={expected_sha} ({checksum_status})");
+    if let Some(err) = host.error.as_deref() {
+        println!("Keyfile read error: {err}");
+    }
+
+    if matches!(provider, ProviderKind::Luks) {
+        println!("Cryptsetup keyfiles: /run/cryptsetup-keys.d/<mapping>.key");
+    }
+    println!();
+}
+
+/// Render LUKS mapping status along with staged `/run/cryptsetup-keys.d` key files.
+fn print_luks_table(config: &LockchainConfig, mappings: Vec<LuksMappingDescriptor>) {
+    let expected = expected_checksum(config);
+    println!("{:<24} {:<12} {}", "MAPPING", "STATUS", "SOURCE");
+    for mapping in mappings {
+        let (status, status_detail) = match mapping.state {
+            LuksState::Active => ("active".to_string(), None),
+            LuksState::Inactive => ("inactive".to_string(), None),
+            LuksState::Unknown(reason) => ("unknown".to_string(), Some(reason)),
+        };
+
+        println!("{:<24} {:<12} {}", mapping.name, status, mapping.source);
+        if let Some(detail) = status_detail {
+            println!("  reason: {detail}");
+        }
+
+        let key_path =
+            PathBuf::from("/run/cryptsetup-keys.d").join(format!("{}.key", mapping.name));
+        let summary = inspect_key_file(&key_path);
+        let presence = if summary.present {
+            "present"
+        } else {
+            "missing"
+        };
+        let mode = summary
+            .mode
+            .map(|mode| format!("{mode:04o}"))
+            .unwrap_or_else(|| "----".to_string());
+        let size = summary
+            .size
+            .map(|size| size.to_string())
+            .unwrap_or_else(|| "-".to_string());
+        let actual_sha = summary.sha256.as_deref().unwrap_or("-");
+        let expected_sha = expected.unwrap_or("-");
+        let checksum_status = match (expected, summary.sha256.as_deref()) {
+            (Some(exp), Some(actual)) if exp.eq_ignore_ascii_case(actual) => "match",
+            (Some(_), Some(_)) => "mismatch",
+            (Some(_), None) => "unavailable",
+            (None, Some(_)) => "unset",
+            (None, None) => "unset",
+        };
+
+        println!(
+            "  keyfile: {} ({presence}, {size} bytes, mode {mode})",
+            key_path.display()
+        );
+        println!("  sha256: actual={actual_sha} expected={expected_sha} ({checksum_status})");
+        if let Some(err) = summary.error.as_deref() {
+            println!("  keyfile read error: {err}");
+        }
     }
 }
