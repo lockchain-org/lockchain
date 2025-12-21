@@ -54,9 +54,7 @@ pub fn parse_crypttab(contents: &str) -> LockchainResult<Vec<CrypttabEntry>> {
             name: name.to_string(),
             source: source.to_string(),
             key: key.and_then(normalize_key_field),
-            options: options
-                .map(parse_options_field)
-                .unwrap_or_default(),
+            options: options.map(parse_options_field).unwrap_or_default(),
         });
     }
 

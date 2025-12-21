@@ -79,7 +79,14 @@ impl CryptsetupCommand {
         }
 
         let key_arg = keyfile.to_string_lossy().into_owned();
-        let args = ["luksAddKey", "--batch-mode", "--key-file", "-", source, key_arg.as_str()];
+        let args = [
+            "luksAddKey",
+            "--batch-mode",
+            "--key-file",
+            "-",
+            source,
+            key_arg.as_str(),
+        ];
         let out = self.run(&args, Some(existing_passphrase))?;
         if out.status == 0 {
             return Ok(());

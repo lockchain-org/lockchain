@@ -391,9 +391,11 @@ impl LuksProvider for SystemLuksProvider {
             .inspect_err(|err| {
                 self.set_last_error(err.to_string());
             })?;
-        self.cryptsetup.close_mapping(&verify_name).inspect_err(|err| {
-            self.set_last_error(err.to_string());
-        })?;
+        self.cryptsetup
+            .close_mapping(&verify_name)
+            .inspect_err(|err| {
+                self.set_last_error(err.to_string());
+            })?;
 
         self.clear_last_error();
         Ok(())
