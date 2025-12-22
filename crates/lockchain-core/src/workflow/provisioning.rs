@@ -337,17 +337,19 @@ pub fn forge_key<P: ZfsProvider<Error = LockchainError> + Clone>(
             install_dracut_module(request, &mut events)?;
         }
         InitramfsFlavor::InitramfsTools => install_initramfs_tools_hooks(
-            dest_key_path.parent().unwrap_or(&mountpoint),
-            &dest_key_path,
-            filename.as_str(),
-            Some(&digest),
-            config
-                .usb
-                .device_label
-                .as_deref()
-                .unwrap_or(LOCKCHAIN_LABEL),
-            device_uuid.as_deref(),
-            &[],
+            InitramfsToolsHookRequest {
+                mountpoint: dest_key_path.parent().unwrap_or(&mountpoint),
+                key_path: &dest_key_path,
+                key_filename: filename.as_str(),
+                checksum: Some(&digest),
+                token_label: config
+                    .usb
+                    .device_label
+                    .as_deref()
+                    .unwrap_or(LOCKCHAIN_LABEL),
+                token_uuid: device_uuid.as_deref(),
+                mappings: &[],
+            },
             &mut events,
         )?,
     }
@@ -577,17 +579,19 @@ pub fn forge_luks_key<P: LuksProvider<Error = LockchainError> + Clone>(
             install_dracut_module(request, &mut events)?;
         }
         InitramfsFlavor::InitramfsTools => install_initramfs_tools_hooks(
-            &mountpoint,
-            &key_path,
-            filename.as_str(),
-            Some(&digest),
-            config
-                .usb
-                .device_label
-                .as_deref()
-                .unwrap_or(LOCKCHAIN_LABEL),
-            device_uuid.as_deref(),
-            &mappings,
+            InitramfsToolsHookRequest {
+                mountpoint: &mountpoint,
+                key_path: &key_path,
+                key_filename: filename.as_str(),
+                checksum: Some(&digest),
+                token_label: config
+                    .usb
+                    .device_label
+                    .as_deref()
+                    .unwrap_or(LOCKCHAIN_LABEL),
+                token_uuid: device_uuid.as_deref(),
+                mappings: &mappings,
+            },
             &mut events,
         )?,
     }
@@ -1588,6 +1592,16 @@ pub(crate) struct DracutInstallRequest<'a> {
     mappings: &'a [String],
 }
 
+struct InitramfsToolsHookRequest<'a> {
+    mountpoint: &'a Path,
+    key_path: &'a Path,
+    key_filename: &'a str,
+    checksum: Option<&'a str>,
+    token_label: &'a str,
+    token_uuid: Option<&'a str>,
+    mappings: &'a [String],
+}
+
 impl DracutInstallRequest<'_> {
     fn to_context(&self) -> DracutContext {
         DracutContext {
@@ -1637,15 +1651,17 @@ fn detect_initramfs_flavor() -> LockchainResult<InitramfsFlavor> {
 }
 
 fn install_initramfs_tools_hooks(
-    mountpoint: &Path,
-    key_path: &Path,
-    key_filename: &str,
-    checksum: Option<&str>,
-    token_label: &str,
-    token_uuid: Option<&str>,
-    mappings: &[String],
+    request: InitramfsToolsHookRequest<'_>,
     events: &mut Vec<WorkflowEvent>,
 ) -> LockchainResult<()> {
+    let mountpoint = request.mountpoint;
+    let key_path = request.key_path;
+    let key_filename = request.key_filename;
+    let checksum = request.checksum;
+    let token_label = request.token_label;
+    let token_uuid = request.token_uuid;
+    let mappings = request.mappings;
+
     let hook_path = Path::new(INITRAMFS_HOOK_PATH);
     if let Some(parent) = hook_path.parent() {
         fs::create_dir_all(parent)?;
@@ -2255,17 +2271,19 @@ pub(crate) fn repair_boot_assets(
             install_dracut_module(request, events)?;
         }
         InitramfsFlavor::InitramfsTools => install_initramfs_tools_hooks(
-            &mountpoint_path,
-            &dest_path,
-            key_filename.as_str(),
-            config.usb.expected_sha256.as_deref(),
-            config
-                .usb
-                .device_label
-                .as_deref()
-                .unwrap_or(LOCKCHAIN_LABEL),
-            config.usb.device_uuid.as_deref(),
-            &mappings,
+            InitramfsToolsHookRequest {
+                mountpoint: &mountpoint_path,
+                key_path: &dest_path,
+                key_filename: key_filename.as_str(),
+                checksum: config.usb.expected_sha256.as_deref(),
+                token_label: config
+                    .usb
+                    .device_label
+                    .as_deref()
+                    .unwrap_or(LOCKCHAIN_LABEL),
+                token_uuid: config.usb.device_uuid.as_deref(),
+                mappings: &mappings,
+            },
             events,
         )?,
     }
