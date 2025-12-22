@@ -110,8 +110,8 @@ Legend: **Yes** (implemented), **Scaffolded** (types/wiring present, workflow no
 | System provider (shell integration) | Yes | Scaffolded |
 | Unlock non-root volumes post-boot | Yes | Planned |
 | Unlock root volume at early boot | Yes (ZFS initrd) | Planned (ADR-003) |
-| dracut loader assets | Yes | Planned |
-| initramfs-tools loader assets | Yes | Planned |
+| dracut loader assets | Yes | Yes |
+| initramfs-tools loader assets | Yes | Yes |
 | Control Deck UI support | Yes (ZFS mode) | Scaffolded (LUKS mode) |
 | Fake-binary provider harness | Yes (`unlock_smoke`) | Planned |
 

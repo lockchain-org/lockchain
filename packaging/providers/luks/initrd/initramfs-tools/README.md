@@ -1,8 +1,18 @@
-# initramfs-tools assets (placeholder)
+# initramfs-tools assets
 
-Planned contents (naming to be finalised during Sprint 3):
+LockChain installs initramfs-tools hooks/scripts during provisioning or tuning.
+Generated paths:
 
-- `hooks/` entries to copy required binaries into initramfs
-- `scripts/local-top/` entries to stage key material before `cryptsetup` runs
+- `/etc/initramfs-tools/hooks/zz-lockchain` (copies required binaries)
+- `/etc/initramfs-tools/scripts/local-top/lockchain` (ZFS auto-unlock)
+- `/etc/initramfs-tools/scripts/init-top/00-lockchain-cryptsetup-keys` (LUKS key staging)
 
-Placeholders are intentional; implementation lands during the Sprint 3 boot integration work.
+The LUKS init-top script mounts the USB token read-only, verifies UUID/checksum,
+and stages keys into `/run/cryptsetup-keys.d/<mapping>.key`.
+
+Validation checklist:
+
+- Ensure initramfs-tools is installed and dracut is absent.
+- Run `lockchain tuning` (or `lockchain repair`) to install hooks.
+- Confirm assets in the image with `lsinitramfs /boot/initrd.img-$(uname -r) | rg 'lockchain|cryptsetup-keys'`.
+- Rebuild with `update-initramfs -u`, reboot, and confirm unlock uses staged keys.

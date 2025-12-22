@@ -339,6 +339,7 @@ pub fn forge_key<P: ZfsProvider<Error = LockchainError> + Clone>(
         InitramfsFlavor::InitramfsTools => install_initramfs_tools_hooks(
             dest_key_path.parent().unwrap_or(&mountpoint),
             &dest_key_path,
+            filename.as_str(),
             Some(&digest),
             config
                 .usb
@@ -578,6 +579,7 @@ pub fn forge_luks_key<P: LuksProvider<Error = LockchainError> + Clone>(
         InitramfsFlavor::InitramfsTools => install_initramfs_tools_hooks(
             &mountpoint,
             &key_path,
+            filename.as_str(),
             Some(&digest),
             config
                 .usb
@@ -1637,6 +1639,7 @@ fn detect_initramfs_flavor() -> LockchainResult<InitramfsFlavor> {
 fn install_initramfs_tools_hooks(
     mountpoint: &Path,
     key_path: &Path,
+    key_filename: &str,
     checksum: Option<&str>,
     token_label: &str,
     token_uuid: Option<&str>,
@@ -1652,7 +1655,7 @@ set -e
 
 . /usr/share/initramfs-tools/hook-functions
 
-    for bin in zfs blkid mount umount mountpoint sha256sum stat awk tr wc cat chmod mv; do
+for bin in zfs blkid mount umount mountpoint sha256sum stat awk tr wc cat chmod mv ln rm touch udevadm sleep mkdir; do
     if command -v "$bin" >/dev/null 2>&1; then
         copy_exec "$(command -v "$bin")"
     fi
@@ -1790,24 +1793,49 @@ TOKEN_LABEL="{label}"
 TOKEN_UUID="{uuid}"
 MOUNTPOINT="{mountpoint}"
 KEY_PATH="{key_path}"
+KEY_FILENAME="{key_filename}"
 KEY_SHA256="{checksum}"
+
 DEST_DIR="/run/cryptsetup-keys.d"
-MAX_WAIT=30
-SOURCE_WAIT=90
+MAX_WAIT_SECONDS=30
+SOURCE_WAIT_SECONDS=90
 SLEEP_INTERVAL=1
+MOUNT_RETRIES=3
 MOUNT_OPTS="ro,nosuid,nodev,noexec"
 
-log() {{
-    echo "lockchain: $*" >&2
+log_line() {{
+    echo "[LOCKCHAIN] $*" >&2
 }}
 
-if [ -z "$MAPPINGS" ]; then
+info() {{
+    log_line "INFO :: $*"
+}}
+
+warn() {{
+    log_line "WARN :: $*"
+}}
+
+fallback_exit() {{
+    if [ "$#" -gt 0 ]; then
+        warn "$*"
+    fi
+    warn "LockChain defers to native/systemd passphrase prompts."
     exit 0
-fi
+}}
+
+trap 'rc=$?; if [ "$rc" -ne 0 ]; then warn "LockChain cryptsetup key staging aborted (rc=$rc)."; warn "Deferring to native prompts."; exit 0; fi' EXIT
+
+settle_udev() {{
+    if command -v udevadm >/dev/null 2>&1; then
+        if ! udevadm settle >/dev/null 2>&1; then
+            warn "udevadm settle reported an error; continuing regardless."
+        fi
+    fi
+}}
 
 wait_for_device() {{
     elapsed=0
-    while [ "$elapsed" -lt "$MAX_WAIT" ]; do
+    while [ "$elapsed" -lt "$MAX_WAIT_SECONDS" ]; do
         if blkid -L "$TOKEN_LABEL" >/dev/null 2>&1; then
             return 0
         fi
@@ -1820,7 +1848,7 @@ wait_for_device() {{
 wait_for_source_key() {{
     path="$1"
     elapsed=0
-    while [ "$elapsed" -lt "$SOURCE_WAIT" ]; do
+    while [ "$elapsed" -lt "$SOURCE_WAIT_SECONDS" ]; do
         if [ -f "$path" ]; then
             return 0
         fi
@@ -1830,96 +1858,192 @@ wait_for_source_key() {{
     return 1
 }}
 
-if ! wait_for_device; then
-    log "token $TOKEN_LABEL not detected within $MAX_WAIT seconds; deferring to native prompts."
-    exit 0
-fi
-
-DEVICE="$(blkid -L "$TOKEN_LABEL" 2>/dev/null || true)"
-if [ -z "$DEVICE" ]; then
-    log "token not detected; skipping key staging"
-    exit 0
-fi
-
-if [ -n "$TOKEN_UUID" ]; then
-    actual_uuid="$(blkid -s UUID -o value "$DEVICE" 2>/dev/null || true)"
-    if [ -z "$actual_uuid" ] || [ "$actual_uuid" != "$TOKEN_UUID" ]; then
-        log "token UUID mismatch; refusing to stage keys"
-        exit 0
+mount_token() {{
+    device="$1"
+    mkdir -p "$MOUNTPOINT"
+    if mountpoint -q "$MOUNTPOINT" 2>/dev/null; then
+        return 0
     fi
-fi
 
-mkdir -p "$MOUNTPOINT"
-if mountpoint -q "$MOUNTPOINT"; then
-    :
-elif ! mount -o "$MOUNT_OPTS" "$DEVICE" "$MOUNTPOINT"; then
-    log "unable to mount token at $MOUNTPOINT"
-    exit 0
-fi
+    attempt=0
+    while [ "$attempt" -lt "$MOUNT_RETRIES" ]; do
+        if mount -o "$MOUNT_OPTS" "$device" "$MOUNTPOINT"; then
+            return 0
+        fi
+        sleep "$SLEEP_INTERVAL"
+        attempt=$((attempt + 1))
+    done
+    return 1
+}}
 
-if ! wait_for_source_key "$KEY_PATH"; then
-    log "key file $KEY_PATH not detected within $SOURCE_WAIT seconds; deferring to native prompts."
-    exit 0
-fi
+verify_uuid() {{
+    device="$1"
+    if [ -z "$TOKEN_UUID" ]; then
+        return 0
+    fi
 
-size=$(stat -c '%s' "$KEY_PATH" 2>/dev/null || echo 0)
-if [ "$size" -ne 32 ]; then
-    log "key file must be 32 bytes (found $size); deferring to native prompts."
-    exit 0
-fi
+    actual="$(blkid -s UUID -o value "$device" 2>/dev/null || true)"
+    if [ -z "$actual" ]; then
+        fallback_exit "Unable to read UUID for $device; refusing to use token."
+    fi
 
-if [ -n "$KEY_SHA256" ]; then
-    set -- $(sha256sum "$KEY_PATH" 2>/dev/null || echo "")
+    actual="$(printf '%s' "$actual" | tr 'A-Z' 'a-z')"
+    expected="$(printf '%s' "$TOKEN_UUID" | tr 'A-Z' 'a-z')"
+    if [ "$actual" != "$expected" ]; then
+        fallback_exit "Token UUID mismatch for $device (expected $TOKEN_UUID, found $actual)."
+    fi
+}}
+
+verify_size() {{
+    path="$1"
+    size=0
+    if command -v stat >/dev/null 2>&1; then
+        size=$(stat -c '%s' "$path" 2>/dev/null || echo 0)
+    else
+        size=$(wc -c <"$path" 2>/dev/null || echo 0)
+    fi
+    if [ "$size" != "32" ]; then
+        fallback_exit "Key file $path must be 32 raw bytes (found $size)."
+    fi
+}}
+
+verify_checksum() {{
+    path="$1"
+    if [ -z "$KEY_SHA256" ]; then
+        return 0
+    fi
+
+    actual="$(sha256sum "$path" 2>/dev/null || true)"
+    set -- $actual
     actual="$1"
-    if [ -z "$actual" ] || [ "$actual" != "$KEY_SHA256" ]; then
-        log "checksum mismatch for $KEY_PATH; refusing to stage keys."
+    if [ -z "$actual" ]; then
+        fallback_exit "Unable to compute SHA-256 for $path."
+    fi
+
+    actual="$(printf '%s' "$actual" | tr 'A-Z' 'a-z')"
+    expected="$(printf '%s' "$KEY_SHA256" | tr 'A-Z' 'a-z')"
+    if [ "$actual" != "$expected" ]; then
+        fallback_exit "Checksum mismatch for $path (expected $KEY_SHA256, found $actual)."
+    fi
+}}
+
+ensure_dest_writable() {{
+    dir="$1"
+    mkdir -p "$dir" 2>/dev/null || true
+    chmod 700 "$dir" 2>/dev/null || true
+
+    if touch "$dir/.rwtest" 2>/dev/null; then
+        rm -f "$dir/.rwtest" 2>/dev/null || true
+        return 0
+    fi
+
+    umount "$dir" 2>/dev/null || true
+    if mount -t tmpfs -o rw,nosuid,nodev,mode=700 lockchain-cryptsetup-keys "$dir" 2>/dev/null; then
+        if touch "$dir/.rwtest" 2>/dev/null; then
+            rm -f "$dir/.rwtest" 2>/dev/null || true
+            return 0
+        fi
+    fi
+
+    alt="/tmp/cryptsetup-keys"
+    mkdir -p "$alt" 2>/dev/null || true
+    chmod 700 "$alt" 2>/dev/null || true
+    if ! mountpoint -q "$alt" 2>/dev/null; then
+        mount -t tmpfs -o rw,nosuid,nodev,mode=700 lockchain-cryptsetup-keys-alt "$alt" 2>/dev/null || true
+    fi
+
+    rm -rf "$dir" 2>/dev/null || true
+    if ln -s "$alt" "$dir" 2>/dev/null; then
+        if touch "$dir/.rwtest" 2>/dev/null; then
+            rm -f "$dir/.rwtest" 2>/dev/null || true
+            return 0
+        fi
+    fi
+
+    return 1
+}}
+
+main() {{
+    set -- $MAPPINGS
+    if [ "$#" -eq 0 ]; then
+        info "No LockChain-managed crypt mappings configured; skipping staging."
         exit 0
     fi
-fi
 
-mkdir -p "$DEST_DIR" 2>/dev/null || true
-chmod 700 "$DEST_DIR" 2>/dev/null || true
-if ! touch "$DEST_DIR/.rwtest" 2>/dev/null; then
-    umount "$DEST_DIR" 2>/dev/null || true
-    mount -t tmpfs -o rw,nosuid,nodev,mode=700 lockchain-cryptsetup-keys "$DEST_DIR" 2>/dev/null || true
-    if ! touch "$DEST_DIR/.rwtest" 2>/dev/null; then
-        log "unable to prepare staging directory $DEST_DIR; refusing to stage keys."
-        exit 0
+    settle_udev
+
+    if ! wait_for_device; then
+        fallback_exit "Token label $TOKEN_LABEL not detected within $MAX_WAIT_SECONDS seconds."
     fi
-fi
-rm -f "$DEST_DIR/.rwtest" 2>/dev/null || true
 
-umask 077
-for mapping in $MAPPINGS; do
-    case "$mapping" in
-        ""|*[!A-Za-z0-9_.-]*)
-            log "skipping unsafe mapping name $mapping"
+    device="$(blkid -L "$TOKEN_LABEL" 2>/dev/null || true)"
+    if [ -z "$device" ]; then
+        fallback_exit "Token $TOKEN_LABEL not detected; skipping auto-unlock."
+    fi
+
+    verify_uuid "$device"
+
+    if ! mount_token "$device"; then
+        fallback_exit "Unable to mount token $device at $MOUNTPOINT."
+    fi
+
+    source_key="$MOUNTPOINT/$KEY_FILENAME"
+    if [ -z "$KEY_FILENAME" ]; then
+        source_key="$KEY_PATH"
+    elif [ -n "$KEY_PATH" ]; then
+        case "$KEY_PATH" in
+            "$MOUNTPOINT"/*) ;;
+            *) source_key="$KEY_PATH" ;;
+        esac
+    fi
+
+    if ! wait_for_source_key "$source_key"; then
+        fallback_exit "Key file $source_key not detected within $SOURCE_WAIT_SECONDS seconds on token."
+    fi
+
+    verify_size "$source_key"
+    verify_checksum "$source_key"
+
+    if ! ensure_dest_writable "$DEST_DIR"; then
+        fallback_exit "Unable to prepare staging directory $DEST_DIR."
+    fi
+
+    umask 077
+    for mapping in "$@"; do
+        case "$mapping" in
+            ""|*[!A-Za-z0-9_.-]*)
+                warn "Skipping unsafe mapping name '$mapping' for key staging."
+                continue
+                ;;
+        esac
+        tmp="$DEST_DIR/.$mapping.key.$$"
+        dest="$DEST_DIR/$mapping.key"
+        if ! cat "$source_key" >"$tmp" 2>/dev/null; then
+            warn "Failed to stage key for $mapping."
+            rm -f "$tmp" 2>/dev/null || true
             continue
-            ;;
-    esac
-    tmp="$DEST_DIR/.$mapping.key.$$"
-    dest="$DEST_DIR/$mapping.key"
-    if ! cat "$KEY_PATH" >"$tmp" 2>/dev/null; then
-        rm -f "$tmp" 2>/dev/null || true
-        log "failed to stage key for $mapping"
-        continue
-    fi
-    chmod 0400 "$tmp" 2>/dev/null || true
-    if ! mv -f "$tmp" "$dest" 2>/dev/null; then
-        rm -f "$tmp" 2>/dev/null || true
-        log "failed to promote staged key for $mapping"
-        continue
-    fi
-    chmod 0400 "$dest" 2>/dev/null || true
-done
+        fi
+        chmod 0400 "$tmp" 2>/dev/null || true
+        if ! mv -f "$tmp" "$dest" 2>/dev/null; then
+            warn "Failed to promote staged key for $mapping."
+            rm -f "$tmp" 2>/dev/null || true
+            continue
+        fi
+        chmod 0400 "$dest" 2>/dev/null || true
+        info "Staged key for $mapping at $dest."
+    done
 
-exit 0
+    exit 0
+}}
+
+main "$@"
 "#,
         mappings = mappings_str,
         label = token_label,
         uuid = uuid_str,
         mountpoint = mountpoint_str,
         key_path = key_path_str,
+        key_filename = key_filename,
         checksum = checksum_str
     );
 
@@ -2133,6 +2257,7 @@ pub(crate) fn repair_boot_assets(
         InitramfsFlavor::InitramfsTools => install_initramfs_tools_hooks(
             &mountpoint_path,
             &dest_path,
+            key_filename.as_str(),
             config.usb.expected_sha256.as_deref(),
             config
                 .usb

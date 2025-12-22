@@ -6,5 +6,5 @@ This directory is reserved for provider-specific early-boot integration assets f
 Status:
 
 - dracut module templates: `packaging/dracut/`
-- initramfs-tools hooks/scripts (pending)
+- initramfs-tools hooks/scripts: installed during provisioning/tuning (see `packaging/providers/luks/initrd/initramfs-tools/README.md`)
 - keyscript helpers for `cryptsetup` + `/etc/crypttab` (pending)
