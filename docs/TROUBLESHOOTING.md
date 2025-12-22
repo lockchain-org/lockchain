@@ -174,7 +174,38 @@ lockchain tuning   # rebuilds and validates dracut/initramfs assets
 
 ---
 
-## 9) Roll back to a previous release
+## 9) Rescue: disable initramfs integration
+**Symptoms**
+- Early boot hangs or repeats passphrase prompts.
+- You need a safe fallback while fixing config or USB issues.
+
+**Checks**
+```bash
+lockchain validate -f /etc/lockchain.toml
+```
+
+**Rescue Steps**
+- dracut:
+  ```bash
+  sudo rm -rf /usr/lib/dracut/modules.d/90lockchain /lib/dracut/modules.d/90lockchain
+  sudo dracut -f
+  ```
+- initramfs-tools:
+  ```bash
+  sudo rm -f /etc/initramfs-tools/hooks/zz-lockchain \
+    /etc/initramfs-tools/scripts/local-top/lockchain \
+    /etc/initramfs-tools/scripts/init-top/00-lockchain-cryptsetup-keys
+  sudo update-initramfs -u
+  ```
+
+Once disabled, the system falls back to native passphrase prompts. Fix the config and re-enable with:
+```bash
+lockchain tuning
+```
+
+---
+
+## 10) Roll back to a previous release
 **Symptoms**
 - Recent upgrade introduced regressions you need to bypass temporarily.
 

@@ -99,12 +99,22 @@ install_initramfs_integration() {
   fi
 
   if [[ -n "$cli" && -x "$cli" && -f "$CONFIG_PATH" ]]; then
+    local validation_output=""
+    if ! validation_output=$(LOCKCHAIN_CONFIG="$CONFIG_PATH" "$cli" validate -f "$CONFIG_PATH" 2>&1); then
+      warn "Configuration validation failed; skipping initramfs integration to avoid boot issues."
+      printf '%s\n' "$validation_output" >&2
+      initramfs_rollback_hint "$INITRAMFS_TOOL"
+      return
+    fi
+    log "Configuration validated."
     log "Installing boot assets via lockchain-cli tuning (config: $CONFIG_PATH)."
     if ! LOCKCHAIN_CONFIG="$CONFIG_PATH" "$cli" tuning; then
       warn "lockchain-cli tuning failed; attempting direct initramfs rebuild if assets exist."
     fi
   else
     warn "lockchain-cli or config not found; skipping tuning step."
+    initramfs_rollback_hint "$INITRAMFS_TOOL"
+    return
   fi
 
   if rebuild_initramfs "$INITRAMFS_TOOL"; then

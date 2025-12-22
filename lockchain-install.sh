@@ -493,10 +493,26 @@ for bin in lockchain-cli lockchain-daemon lockchain-key-usb lockchain-ui; do
 done
 record_status "Binaries installed to $BINARY_DEST"
 
+CONFIG_VALID=1
+if [[ -x "$CLI_BIN" ]]; then
+  if ! validation_output=$("$CLI_BIN" validate -f "$CONFIG_PATH" 2>&1); then
+    log 'Configuration validation failed; skipping key provisioning and initramfs integration.'
+    printf '%s\n' "$validation_output" >&2
+    record_status 'Configuration invalid; initramfs integration skipped'
+    CONFIG_VALID=0
+  fi
+else
+  log 'lockchain-cli not available for configuration validation.'
+  CONFIG_VALID=0
+fi
+
 KEYGEN_RAN=0
 if [[ ${SKIP_KEYGEN:-0} -eq 1 ]]; then
   log 'Skipping key provisioning and initramfs integration (SKIP_KEYGEN=1).'
   record_status 'Key provisioning skipped'
+elif [[ $CONFIG_VALID -eq 0 ]]; then
+  log 'Skipping key provisioning because configuration validation failed.'
+  record_status 'Key provisioning skipped (config invalid)'
 else
   log 'Provisioning key material and refreshing initramfs integration.'
   run_plan_steps "$PLAN_MAIN" "$SELECTED_DEVICE" key-generation
