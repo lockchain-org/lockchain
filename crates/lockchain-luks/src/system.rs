@@ -57,31 +57,6 @@ impl SystemLuksProvider {
         })
     }
 
-    /// Convenience wrapper for `mapping_state`.
-    pub fn status(&self, name: &str) -> LockchainResult<LuksState> {
-        self.mapping_state(name)
-    }
-
-    /// Convenience wrapper for `unlock_mapping`.
-    pub fn unlock(&self, name: &str, key: &[u8]) -> LockchainResult<()> {
-        self.unlock_mapping(name, key)
-    }
-
-    /// Reserved for future initrd integration (ADR-003).
-    pub fn init(&self) -> LockchainResult<()> {
-        Err(LockchainError::Provider("not implemented".into()))
-    }
-
-    /// Reserved for future provider self-test hooks (ADR-003).
-    pub fn self_test(&self) -> LockchainResult<()> {
-        Err(LockchainError::Provider("not implemented".into()))
-    }
-
-    /// Reserved for future provider-specific validation (ADR-003).
-    pub fn validate(&self) -> LockchainResult<()> {
-        Err(LockchainError::Provider("not implemented".into()))
-    }
-
     /// Return whether `config.key_hex_path()` exists and contains a 32-byte key.
     pub fn key_staged(&self) -> bool {
         match fs::metadata(&self.key_path) {
@@ -117,66 +92,92 @@ impl SystemLuksProvider {
         target: &str,
         entries: &'a [CrypttabEntry],
     ) -> Result<Option<&'a CrypttabEntry>, String> {
-        let mut name_matches: Vec<&CrypttabEntry> = entries
-            .iter()
-            .filter(|entry| entry.name == target)
-            .collect();
-        if name_matches.len() > 1 {
+        // Precedence: name -> source -> UUID -> canonical path.
+        let mut name_match = None;
+        let mut name_count = 0usize;
+        let mut source_match = None;
+        let mut source_count = 0usize;
+
+        for entry in entries {
+            if entry.name == target {
+                name_count += 1;
+                if name_count == 1 {
+                    name_match = Some(entry);
+                }
+            }
+            if entry.source == target {
+                source_count += 1;
+                if source_count == 1 {
+                    source_match = Some(entry);
+                }
+            }
+        }
+
+        if name_count > 1 {
             return Err(format!(
                 "target `{target}` matches multiple crypttab mapping names"
             ));
         }
-        if let Some(entry) = name_matches.pop() {
+        if let Some(entry) = name_match {
             return Ok(Some(entry));
         }
 
-        let mut source_matches: Vec<&CrypttabEntry> = entries
-            .iter()
-            .filter(|entry| entry.source == target)
-            .collect();
-        if source_matches.len() > 1 {
+        if source_count > 1 {
             return Err(format!(
                 "target `{target}` matches multiple crypttab source devices"
             ));
         }
-        if let Some(entry) = source_matches.pop() {
+        if let Some(entry) = source_match {
             return Ok(Some(entry));
         }
 
         if let Some(target_uuid) = normalize_uuid(target) {
-            let mut uuid_matches: Vec<&CrypttabEntry> = entries
-                .iter()
-                .filter(|entry| normalize_uuid(&entry.source).as_ref() == Some(&target_uuid))
-                .collect();
-            if uuid_matches.len() > 1 {
+            let mut uuid_match = None;
+            let mut uuid_count = 0usize;
+            for entry in entries {
+                if normalize_uuid(&entry.source).as_ref() == Some(&target_uuid) {
+                    uuid_count += 1;
+                    if uuid_count == 1 {
+                        uuid_match = Some(entry);
+                    }
+                }
+            }
+            if uuid_count > 1 {
                 return Err(format!(
                     "target `{target}` matches multiple crypttab UUID entries"
                 ));
             }
-            if let Some(entry) = uuid_matches.pop() {
+            if let Some(entry) = uuid_match {
                 return Ok(Some(entry));
             }
         }
 
         if target.starts_with('/') {
             if let Some(target_path) = canonicalize_existing(target) {
-                let mut path_matches: Vec<&CrypttabEntry> = entries
-                    .iter()
-                    .filter(|entry| entry.source.starts_with('/'))
-                    .filter(|entry| {
-                        canonicalize_existing(&entry.source)
-                            .map(|p| p == target_path)
-                            .unwrap_or(false)
-                    })
-                    .collect();
+                let mut path_match = None;
+                let mut path_count = 0usize;
+                for entry in entries {
+                    if !entry.source.starts_with('/') {
+                        continue;
+                    }
+                    if canonicalize_existing(&entry.source)
+                        .map(|p| p == target_path)
+                        .unwrap_or(false)
+                    {
+                        path_count += 1;
+                        if path_count == 1 {
+                            path_match = Some(entry);
+                        }
+                    }
+                }
 
-                if path_matches.len() > 1 {
+                if path_count > 1 {
                     return Err(format!(
                         "target `{target}` matches multiple crypttab device paths"
                     ));
                 }
 
-                if let Some(entry) = path_matches.pop() {
+                if let Some(entry) = path_match {
                     return Ok(Some(entry));
                 }
             }
@@ -513,12 +514,9 @@ fn find_in_path(binary: &str) -> Option<PathBuf> {
 
 fn normalize_uuid(value: &str) -> Option<String> {
     let trimmed = value.trim();
-    let without_prefix = if trimmed.len() >= 5 && trimmed[..5].eq_ignore_ascii_case("uuid=") {
-        &trimmed[5..]
-    } else {
-        trimmed
-    };
-    let candidate = without_prefix.trim();
+    let candidate = strip_prefix_case_insensitive(trimmed, "UUID=")
+        .unwrap_or(trimmed)
+        .trim();
     if candidate.is_empty() {
         return None;
     }

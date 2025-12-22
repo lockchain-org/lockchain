@@ -7,7 +7,6 @@ use lockchain_core::error::{LockchainError, LockchainResult};
 
 /// One line of `/etc/crypttab`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
 pub struct CrypttabEntry {
     pub name: String,
     pub source: String,
@@ -16,7 +15,6 @@ pub struct CrypttabEntry {
 }
 
 /// Parse a `crypttab` document.
-#[allow(dead_code)]
 pub fn parse_crypttab(contents: &str) -> LockchainResult<Vec<CrypttabEntry>> {
     let mut entries = Vec::new();
 

@@ -62,9 +62,7 @@ pub fn decode_key_bytes(origin: &Path, bytes: &[u8]) -> LockchainResult<DecodedK
         ));
     }
 
-    let filtered = String::from_utf8(filtered)
-        .map_err(|_| invalid_key(origin, "hex key contains non-UTF-8 characters"))?;
-    let key = Vec::from_hex(filtered.as_str())
+    let key = Vec::from_hex(&filtered)
         .map_err(|err| invalid_key(origin, format!("hex decode failed: {err}")))?;
 
     if key.len() != 32 {

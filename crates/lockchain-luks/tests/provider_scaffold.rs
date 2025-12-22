@@ -34,7 +34,7 @@ fn system_provider_status_reports_mapping_state() -> LockchainResult<()> {
     );
     let provider = SystemLuksProvider::from_config(&config)?;
 
-    assert_eq!(provider.status("vault")?, LuksState::Active);
+    assert_eq!(provider.mapping_state("vault")?, LuksState::Active);
     assert!(provider.last_error().is_none());
     Ok(())
 }

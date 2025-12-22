@@ -73,16 +73,6 @@ impl<P> LuksKeyProvider<P> {
     pub fn new(inner: P) -> Self {
         Self { inner }
     }
-
-    /// Borrow the wrapped provider implementation.
-    pub fn inner(&self) -> &P {
-        &self.inner
-    }
-
-    /// Consume the adapter and return the wrapped provider.
-    pub fn into_inner(self) -> P {
-        self.inner
-    }
 }
 
 impl<P> KeyProvider for LuksKeyProvider<P>
