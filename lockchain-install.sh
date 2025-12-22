@@ -18,6 +18,47 @@ require_root() {
   fi
 }
 
+INITRAMFS_TOOL=""
+INITRAMFS_DRACUT_PATH=""
+INITRAMFS_UPDATE_PATH=""
+
+resolve_initramfs_tool() {
+  INITRAMFS_DRACUT_PATH=$(command -v dracut 2>/dev/null || true)
+  INITRAMFS_UPDATE_PATH=$(command -v update-initramfs 2>/dev/null || true)
+
+  if [[ -n "$INITRAMFS_DRACUT_PATH" ]]; then
+    INITRAMFS_TOOL="dracut"
+    if [[ -n "$INITRAMFS_UPDATE_PATH" ]]; then
+      log "Initramfs tooling detected: dracut ($INITRAMFS_DRACUT_PATH) and update-initramfs ($INITRAMFS_UPDATE_PATH); preferring dracut."
+    else
+      log "Initramfs tooling detected: dracut ($INITRAMFS_DRACUT_PATH)."
+    fi
+  elif [[ -n "$INITRAMFS_UPDATE_PATH" ]]; then
+    INITRAMFS_TOOL="initramfs-tools"
+    log "Initramfs tooling detected: update-initramfs ($INITRAMFS_UPDATE_PATH)."
+  else
+    INITRAMFS_TOOL=""
+    log "Initramfs tooling not detected (dracut/update-initramfs missing)."
+  fi
+}
+
+initramfs_rollback_hint() {
+  local tool="$1"
+  case "$tool" in
+    dracut)
+      log "Rollback (dracut): rm -rf /usr/lib/dracut/modules.d/90lockchain /lib/dracut/modules.d/90lockchain"
+      log "Rollback (dracut): dracut -f"
+      ;;
+    initramfs-tools)
+      log "Rollback (initramfs-tools): rm -f /etc/initramfs-tools/hooks/zz-lockchain /etc/initramfs-tools/scripts/local-top/lockchain /etc/initramfs-tools/scripts/init-top/00-lockchain-cryptsetup-keys"
+      log "Rollback (initramfs-tools): update-initramfs -u"
+      ;;
+    *)
+      log "Rollback: remove LockChain initramfs assets and rebuild your initramfs image."
+      ;;
+  esac
+}
+
 run_as_build_user() {
   local script="$1"
   if [[ -z "$script" ]]; then
@@ -348,6 +389,8 @@ KEY_MOUNT=${KEY_MOUNT:-/run/lockchain}
 KEY_FILENAME=${KEY_FILENAME:-key.raw}
 BUILD_USER=${BUILD_USER:-${SUDO_USER:-root}}
 
+export LOCKCHAIN_CONFIG=${LOCKCHAIN_CONFIG:-$CONFIG_PATH}
+
 BUILD_PACKAGES=(
   build-essential
   pkg-config
@@ -372,6 +415,12 @@ fi
 install_build_dependencies
 ensure_rust_toolchain
 build_release
+resolve_initramfs_tool
+if [[ -n "$INITRAMFS_TOOL" ]]; then
+  record_status "Initramfs tooling detected (${INITRAMFS_TOOL})"
+else
+  record_status 'Initramfs tooling not detected'
+fi
 
 CLI_BIN="$TARGET_DIR/lockchain-cli"
 [[ -x "$CLI_BIN" ]] || die "lockchain-cli not found at $CLI_BIN. Ensure cargo build succeeded."
@@ -444,6 +493,17 @@ for bin in lockchain-cli lockchain-daemon lockchain-key-usb lockchain-ui; do
 done
 record_status "Binaries installed to $BINARY_DEST"
 
+KEYGEN_RAN=0
+if [[ ${SKIP_KEYGEN:-0} -eq 1 ]]; then
+  log 'Skipping key provisioning and initramfs integration (SKIP_KEYGEN=1).'
+  record_status 'Key provisioning skipped'
+else
+  log 'Provisioning key material and refreshing initramfs integration.'
+  run_plan_steps "$PLAN_MAIN" "$SELECTED_DEVICE" key-generation
+  record_status 'Key material provisioned and initramfs integration refreshed'
+  KEYGEN_RAN=1
+fi
+
 if ((${#SUMMARY_LINES[@]} > 0)); then
   echo
   log 'Installer status:'
@@ -468,7 +528,26 @@ echo "  USB label:      $USB_LABEL"
 echo "  USB UUID:       ${USB_UUID:-unknown}"
 
 echo
+echo 'Initramfs integration:'
+if [[ -n "$INITRAMFS_TOOL" ]]; then
+  echo "  Tool detected:  $INITRAMFS_TOOL"
+else
+  echo '  Tool detected:  none (dracut/update-initramfs missing)'
+fi
+
+if [[ -n "$INITRAMFS_TOOL" ]]; then
+  initramfs_rollback_hint "$INITRAMFS_TOOL"
+else
+  log 'Install dracut or initramfs-tools, then run `lockchain-cli tuning` to install boot assets.'
+fi
+
+echo
 echo 'Next steps:'
 echo '  1. Launch `lockchain-ui` to complete the Control Deck walkthrough.'
-echo "  2. Forge key material (CLI fallback): lockchain-cli init --dataset \"$SELECTED_DATASET\" --device $SELECTED_DEVICE"
-echo '  3. Validate with `lockchain-cli tuning` and `lockchain-cli repair`.'
+if [[ $KEYGEN_RAN -eq 1 ]]; then
+  echo '  2. Reboot and confirm the system unlocks with the USB token.'
+  echo '  3. Re-run `lockchain-cli tuning` after kernel or policy changes.'
+else
+  echo "  2. Forge key material (CLI fallback): lockchain-cli init --dataset \"$SELECTED_DATASET\" --device $SELECTED_DEVICE"
+  echo '  3. Validate with `lockchain-cli tuning` and `lockchain-cli repair`.'
+fi
