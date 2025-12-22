@@ -1,8 +1,10 @@
-# dracut assets (placeholder)
+# dracut assets
 
-Planned contents (naming to be finalised during Sprint 3):
+Dracut module templates now live under `packaging/dracut/` and are rendered by
+LockChain during provisioning/tuning.
 
-- `module-setup.sh` for the LockChain LUKS module
-- helper script(s) to stage key material into `/run/lockchain/key.raw`
+Key LUKS files:
 
-The ZFS provider's dracut integration currently lives under `crates/lockchain-core/templates/`.
+- `lockchain-cryptsetup-keys.sh` (mount USB RO, verify checksum, stage keys)
+- `lockchain-cryptsetup-keys.service` (initramfs unit)
+- `lockchain-cryptsetup-keys.conf` (drop-in for `systemd-cryptsetup@.service`)

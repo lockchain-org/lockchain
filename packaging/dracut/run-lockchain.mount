@@ -1,0 +1,15 @@
+[Unit]
+Description=LockChain volatile key staging mount
+DefaultDependencies=no
+After=local-fs.target
+Before=lockchain-load-key.service
+ConditionPathExists=/run
+
+[Mount]
+What=tmpfs
+Where=/run/lockchain
+Type=tmpfs
+Options=mode=0700
+
+[Install]
+WantedBy=initrd-root-fs.target
